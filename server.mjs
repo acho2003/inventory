@@ -13,10 +13,11 @@ const DIST_DIR = path.join(__dirname, "dist");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
-const PUBLIC_HOST = process.env.PUBLIC_HOST || "192.168.8.8";
+const PUBLIC_HOST = process.env.PUBLIC_HOST || process.env.RENDER_EXTERNAL_HOSTNAME || "localhost";
 const SUPABASE_URL = process.env.SUPABASE_URL || "";
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const USE_SUPABASE = Boolean(SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY);
+const REQUIRE_SUPABASE = process.env.REQUIRE_SUPABASE === "true";
 const supabase = USE_SUPABASE
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
       auth: { persistSession: false, autoRefreshToken: false }
@@ -25,6 +26,10 @@ const supabase = USE_SUPABASE
 const collections = ["users", "projects", "items", "requisitions", "receipts", "issues", "ledger", "expenses"];
 
 const sessions = new Map();
+
+if (REQUIRE_SUPABASE && !USE_SUPABASE) {
+  throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required when REQUIRE_SUPABASE=true.");
+}
 
 const rolePermissions = {
   requester: ["requisition:create", "requisition:read"],
@@ -537,6 +542,33 @@ async function routeApi(req, res, pathname) {
   sendError(res, 404, "API route not found.");
 }
 
+async function routeHealth(req, res) {
+  if (REQUIRE_SUPABASE && !USE_SUPABASE) {
+    return sendJson(res, 503, {
+      ok: false,
+      storage: "missing-supabase",
+      message: "Supabase credentials are required."
+    });
+  }
+
+  if (USE_SUPABASE) {
+    const result = await supabase.from("app_state").select("id").limit(1);
+    if (result.error) {
+      return sendJson(res, 503, {
+        ok: false,
+        storage: "supabase",
+        message: result.error.message
+      });
+    }
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    storage: USE_SUPABASE ? "supabase" : "local-json",
+    uptime: process.uptime()
+  });
+}
+
 async function serveStatic(req, res, pathname) {
   const rootDir = await fs.access(DIST_DIR).then(() => DIST_DIR).catch(() => PUBLIC_DIR);
   let filePath = pathname === "/" ? path.join(rootDir, "index.html") : path.join(rootDir, pathname);
@@ -556,9 +588,13 @@ async function serveStatic(req, res, pathname) {
     res.writeHead(200, { "Content-Type": types[ext] || "application/octet-stream" });
     res.end(data);
   } catch {
-    const fallback = await fs.readFile(path.join(rootDir, "index.html"));
-    res.writeHead(200, { "Content-Type": "text/html" });
-    res.end(fallback);
+    try {
+      const fallback = await fs.readFile(path.join(rootDir, "index.html"));
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(fallback);
+    } catch {
+      sendError(res, 503, "Frontend build not found. Run npm run build before starting the server.");
+    }
   }
 }
 
@@ -567,6 +603,7 @@ await ensureStore();
 http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (url.pathname === "/healthz") return await routeHealth(req, res);
     if (url.pathname.startsWith("/api/")) return await routeApi(req, res, url.pathname);
     return await serveStatic(req, res, url.pathname);
   } catch (error) {

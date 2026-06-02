@@ -37,6 +37,12 @@ npm run supabase:sync
 
 When Supabase env values are present, the Node API reads and writes Supabase. Without them, it uses `data/store.json` for local testing.
 
+## Render Deployment
+
+The repo includes [render.yaml](C:/Users/a/Documents/gimms/render.yaml) for a Render Blueprint deployment.
+
+Read [docs/render-deployment.md](C:/Users/a/Documents/gimms/docs/render-deployment.md) before deploying. Production Render deployments should set `REQUIRE_SUPABASE=true` and provide Supabase credentials because Render's local filesystem is ephemeral.
+
 For access from other devices on the network, open `http://192.168.8.8:3000`.
 
 ## Demo Users
