@@ -1,0 +1,5 @@
+server.log
+server.err.log
+node_modules/
+.env
+dist/

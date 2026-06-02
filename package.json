@@ -1,0 +1,23 @@
+{
+  "name": "yarju-inventory-system",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "start": "node server.mjs",
+    "import:resources": "python scripts/import_resources.py",
+    "supabase:sync": "node scripts/sync_supabase.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.107.0",
+    "@vitejs/plugin-react": "^6.0.2",
+    "dotenv": "^17.4.2",
+    "lucide-react": "^1.17.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "vite": "^8.0.16"
+  }
+}
