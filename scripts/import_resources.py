@@ -52,6 +52,8 @@ def load_store() -> dict[str, Any]:
             {"id": "u-approver", "username": "approver", "password": "approve123", "name": "Final Approver", "role": "approver"},
         ],
         "projects": [],
+        "budgetHeads": [],
+        "infrastructures": [],
         "items": [],
         "requisitions": [],
         "receipts": [],
@@ -121,6 +123,8 @@ def add_movement(store: dict[str, Any], *, movement_type: str, date_value: str, 
 
 def reset_imported(store: dict[str, Any]):
     store["projects"] = []
+    store["budgetHeads"] = []
+    store["infrastructures"] = []
     store["items"] = []
     store["requisitions"] = []
     store["receipts"] = []
@@ -285,11 +289,29 @@ def import_issues(store: dict[str, Any]):
         import_issue_sheet(store, sheet_name, config)
 
 
+def seed_budget_heads(store: dict[str, Any]):
+    if store.get("budgetHeads"):
+        return
+    for project in store.get("projects", []):
+        store["budgetHeads"].append(
+            {
+                "id": f"bh-{project['id'].replace('p-', '', 1)}",
+                "projectId": project["id"],
+                "name": project["name"],
+                "amount": project.get("budget", 0),
+                "createdBy": "import",
+                "createdByName": "Imported Excel record",
+                "createdAt": datetime.utcnow().isoformat(),
+            }
+        )
+
+
 def main():
     store = load_store()
     reset_imported(store)
     import_oap(store)
     import_issues(store)
+    seed_budget_heads(store)
     store["meta"]["sourceFiles"] = [
         "Yarju OAP Inventory Record.xlsx",
         "Yarju Stone, Cement and others record.xlsx",

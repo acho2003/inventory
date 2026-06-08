@@ -3,9 +3,11 @@ import { createRoot } from "react-dom/client";
 import {
   BarChart3,
   Boxes,
+  Building2,
   ClipboardCheck,
   ClipboardList,
   FileDown,
+  FolderKanban,
   LogOut,
   PackageCheck,
   PackageMinus,
@@ -62,6 +64,32 @@ function lineSummary(lines = []) {
   const first = lines[0];
   const suffix = lines.length > 1 ? ` +${lines.length - 1} more` : "";
   return `${first.itemName || "Item"} (${num(first.quantity)} ${first.unit || ""})${suffix}`;
+}
+
+function byId(rows = []) {
+  return Object.fromEntries(rows.map((row) => [row.id, row]));
+}
+
+function summarizeLedger(rows = []) {
+  const stock = new Map();
+  for (const movement of rows) {
+    const current = stock.get(movement.itemId) || {
+      itemId: movement.itemId,
+      itemName: movement.itemName,
+      category: movement.category || "General",
+      unit: movement.unit || "",
+      received: 0,
+      issued: 0,
+      balance: 0,
+      lastMovementAt: movement.date
+    };
+    if (movement.type === "RECEIPT") current.received += Number(movement.quantity || 0);
+    if (movement.type === "ISSUE") current.issued += Number(movement.quantity || 0);
+    current.balance = current.received - current.issued;
+    if (!current.lastMovementAt || movement.date > current.lastMovementAt) current.lastMovementAt = movement.date;
+    stock.set(movement.itemId, current);
+  }
+  return [...stock.values()].sort((a, b) => a.itemName.localeCompare(b.itemName));
 }
 
 function useApi(token) {
@@ -129,25 +157,27 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem("yarju_token") || "");
   const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
-  const [data, setData] = useState({ dashboard: null, projects: [], items: [], requisitions: [], inventory: [], ledger: [], reports: null });
+  const [data, setData] = useState({ dashboard: null, projects: [], budgetHeads: [], infrastructures: [], items: [], requisitions: [], inventory: [], ledger: [], reports: null });
   const [loading, setLoading] = useState(true);
   const api = useApi(token);
 
   async function loadBase() {
-    const [dashboard, projects, items, requisitions, inventory] = await Promise.all([
+    const [dashboard, projects, budgetHeads, infrastructures, items, requisitions, inventory] = await Promise.all([
       api("/api/dashboard"),
       api("/api/projects"),
+      api("/api/budget-heads"),
+      api("/api/infrastructures"),
       api("/api/items"),
       api("/api/requisitions"),
       api("/api/inventory")
     ]);
-    setData((prev) => ({ ...prev, dashboard, projects, items, requisitions, inventory }));
+    setData((prev) => ({ ...prev, dashboard, projects, budgetHeads, infrastructures, items, requisitions, inventory }));
   }
 
   async function refresh(nextView = view) {
     if (!token) return;
     await loadBase();
-    if (nextView === "inventory") {
+    if (nextView === "inventory" || nextView === "projects") {
       const ledger = await api("/api/ledger");
       setData((prev) => ({ ...prev, ledger }));
     }
@@ -197,6 +227,7 @@ function App() {
 
   const navItems = [
     ["dashboard", "Dashboard", BarChart3, true],
+    ["projects", "Projects", FolderKanban, true],
     ["requisitions", "Requisitions", ClipboardList, true],
     ["approvals", "Approvals", ShieldCheck, user.role !== "requester"],
     ["receive", "Receive Stock", PackageCheck, user.role === "store"],
@@ -253,6 +284,7 @@ function Header({ title, subtitle, eyebrow }) {
 
 function CurrentView(props) {
   if (props.view === "dashboard") return <Dashboard {...props} />;
+  if (props.view === "projects") return <ProjectsPage {...props} />;
   if (props.view === "requisitions") return <Requisitions {...props} />;
   if (props.view === "approvals") return <Approvals {...props} />;
   if (props.view === "receive") return <ReceiveStock {...props} />;
@@ -275,7 +307,7 @@ function Dashboard({ data }) {
         <Kpi label="Low / Zero Stock" value={d.inventory.lowStock} />
       </div>
       <WorkflowStrip />
-      <div className="grid two">
+      <div className="grid three">
         <div className="panel">
           <PanelTitle title="Needs Attention" subtitle="Requests waiting for verification, approval, or order placement." />
           {urgent.length ? <CompactRequestList rows={urgent} /> : <div className="empty compact-empty">No active approvals right now.</div>}
@@ -283,6 +315,13 @@ function Dashboard({ data }) {
         <div className="panel">
           <PanelTitle title="Stock Snapshot" subtitle="Top inventory balances from the current ledger." />
           <InventoryTable rows={data.inventory.slice(0, 10)} compact />
+        </div>
+        <div className="panel">
+          <PanelTitle title="Budget Heads" subtitle="Available for requisitions and store tracking." />
+          <div className="detail-stack">
+            {data.budgetHeads.slice(0, 8).map((head) => <div className="mini-row" key={head.id}><strong>{head.name}</strong><span>{num(head.amount)}</span></div>)}
+            {!data.budgetHeads.length ? <div className="empty compact-empty">No budget heads yet.</div> : null}
+          </div>
         </div>
       </div>
     </>
@@ -348,7 +387,138 @@ function ProjectSelect({ projects, value, onChange }) {
   );
 }
 
-function LineEditor({ items, lines, setLines, receipt = false }) {
+function BudgetHeadSelect({ budgetHeads, value, onChange, projectId = "" }) {
+  const rows = budgetHeads.filter((entry) => !projectId || !entry.projectId || entry.projectId === projectId);
+  return (
+    <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Select budget head</option>
+      {rows.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+    </select>
+  );
+}
+
+function InfrastructureSelect({ infrastructures, value, onChange, budgetHeadId = "" }) {
+  const rows = infrastructures.filter((entry) => !budgetHeadId || entry.budgetHeadId === budgetHeadId);
+  return (
+    <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Select infrastructure</option>
+      {rows.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+    </select>
+  );
+}
+
+function ProjectsPage({ user, data, api, refresh }) {
+  const [selectedProjectId, setSelectedProjectId] = useState(data.projects[0]?.id || "");
+  const [projectForm, setProjectForm] = useState({ name: "", budget: "", status: "Active" });
+  const [budgetForm, setBudgetForm] = useState({ projectId: "", name: "", amount: "" });
+  const [infraForm, setInfraForm] = useState({ projectId: "", budgetHeadId: "", name: "", amount: "", status: "Active" });
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const projectMap = byId(data.projects);
+  const selectedProject = projectMap[selectedProjectId] || data.projects[0];
+  const budgetRows = data.budgetHeads.filter((entry) => !selectedProject?.id || entry.projectId === selectedProject.id || !entry.projectId);
+  const infraRows = data.infrastructures.filter((entry) => !selectedProject?.id || entry.projectId === selectedProject.id || budgetRows.some((head) => head.id === entry.budgetHeadId));
+  const ordered = data.requisitions.filter((req) => req.projectId === selectedProject?.id || budgetRows.some((head) => head.id === req.budgetHeadId));
+  const ledgerRows = data.ledger.filter((row) => row.projectId === selectedProject?.id || budgetRows.some((head) => head.id === row.budgetHeadId));
+
+  async function submitProject(event) {
+    event.preventDefault();
+    await submitEntity("/api/projects", projectForm, () => setProjectForm({ name: "", budget: "", status: "Active" }), "Project added.");
+  }
+
+  async function submitBudget(event) {
+    event.preventDefault();
+    await submitEntity("/api/budget-heads", budgetForm, () => setBudgetForm({ projectId: "", name: "", amount: "" }), "Budget head added.");
+  }
+
+  async function submitInfra(event) {
+    event.preventDefault();
+    await submitEntity("/api/infrastructures", infraForm, () => setInfraForm({ projectId: "", budgetHeadId: "", name: "", amount: "", status: "Active" }), "Infrastructure added.");
+  }
+
+  async function submitEntity(path, body, reset, okMessage) {
+    setMessage("");
+    setError("");
+    try {
+      await api(path, { method: "POST", body: JSON.stringify(body) });
+      reset();
+      setMessage(okMessage);
+      await refresh("projects");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <>
+      <Header title="Projects" eyebrow="Key activities" subtitle="Projects contain budget heads, infrastructure activities, ordered items, and issued stock." />
+      {message ? <div className="success">{message}</div> : null}
+      {error ? <div className="error">{error}</div> : null}
+      {user.role === "approver" ? (
+        <div className="grid three">
+          <form className="panel grid" onSubmit={submitProject}>
+            <PanelTitle title="New Project" />
+            <label>Project Name <input value={projectForm.name} onChange={(e) => setProjectForm({ ...projectForm, name: e.target.value })} required /></label>
+            <label>Budget <input type="number" min="0" step="0.01" value={projectForm.budget} onChange={(e) => setProjectForm({ ...projectForm, budget: e.target.value })} /></label>
+            <label>Status <select value={projectForm.status} onChange={(e) => setProjectForm({ ...projectForm, status: e.target.value })}><option>Active</option><option>Pending</option><option>Closed</option></select></label>
+            <button className="primary" type="submit">Add project</button>
+          </form>
+          <form className="panel grid" onSubmit={submitBudget}>
+            <PanelTitle title="Add Budget Head" />
+            <label>Project <ProjectSelect projects={data.projects} value={budgetForm.projectId} onChange={(projectId) => setBudgetForm({ ...budgetForm, projectId })} /></label>
+            <label>Budget Name <input value={budgetForm.name} onChange={(e) => setBudgetForm({ ...budgetForm, name: e.target.value })} required /></label>
+            <label>Budget Amount <input type="number" min="0" step="0.01" value={budgetForm.amount} onChange={(e) => setBudgetForm({ ...budgetForm, amount: e.target.value })} /></label>
+            <button className="primary" type="submit">Add budget head</button>
+          </form>
+          <form className="panel grid" onSubmit={submitInfra}>
+            <PanelTitle title="Add Key Infrastructure" />
+            <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={infraForm.budgetHeadId} onChange={(budgetHeadId) => {
+              const head = data.budgetHeads.find((entry) => entry.id === budgetHeadId);
+              setInfraForm({ ...infraForm, budgetHeadId, projectId: head?.projectId || infraForm.projectId });
+            }} /></label>
+            <label>Infrastructure Name <input value={infraForm.name} onChange={(e) => setInfraForm({ ...infraForm, name: e.target.value })} required /></label>
+            <label>Amount <input type="number" min="0" step="0.01" value={infraForm.amount} onChange={(e) => setInfraForm({ ...infraForm, amount: e.target.value })} /></label>
+            <button className="primary" type="submit">Add infrastructure</button>
+          </form>
+        </div>
+      ) : null}
+      <div className="grid two">
+        <div className="panel">
+          <PanelTitle title="Projects" />
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Project Name</th><th>Budget</th><th>Used</th><th>Status</th></tr></thead>
+              <tbody>{data.projects.map((project) => {
+                const used = data.ledger.filter((row) => row.projectId === project.id && row.type === "ISSUE").reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+                return <tr key={project.id} className={project.id === selectedProject?.id ? "selected-row" : ""} onClick={() => setSelectedProjectId(project.id)}><td><strong>{project.name}</strong></td><td>{num(project.budget)}</td><td>{num(used)}</td><td>{project.status || "Active"}</td></tr>;
+              })}</tbody>
+            </table>
+          </div>
+        </div>
+        <div className="panel">
+          <PanelTitle title={selectedProject?.name || "Project Detail"} subtitle="Budget heads, infrastructure, ordered items, and issued items." />
+          <div className="detail-stack">
+            <DetailBlock title="Budget Heads" rows={budgetRows.map((row) => `${row.name} - ${num(row.amount)}`)} />
+            <DetailBlock title="Infrastructure Activities" rows={infraRows.map((row) => `${row.name} - ${num(row.amount)}`)} />
+            <DetailBlock title="Ordered Items" rows={ordered.flatMap((req) => (req.lines || []).map((line) => `${req.requisitionNo}: ${line.itemName} (${num(line.quantity)} ${line.unit})`)).slice(0, 12)} />
+            <DetailBlock title="Issued Items" rows={ledgerRows.filter((row) => row.type === "ISSUE").map((row) => `${row.itemName} (${num(row.quantity)} ${row.unit})`).slice(0, 12)} />
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function DetailBlock({ title, rows }) {
+  return (
+    <div className="detail-block">
+      <strong>{title}</strong>
+      {rows.length ? rows.map((row, index) => <span key={`${row}-${index}`}>{row}</span>) : <span className="muted">No records yet.</span>}
+    </div>
+  );
+}
+
+function LineEditor({ items, lines, setLines, receipt = false, arrival = false }) {
   function update(index, patch) {
     setLines(lines.map((line, i) => i === index ? { ...line, ...patch } : line));
   }
@@ -374,6 +544,7 @@ function LineEditor({ items, lines, setLines, receipt = false }) {
             <label>Unit <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} /></label>
             {receipt ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => update(index, { rate: e.target.value })} /></label> : null}
             {receipt ? <label>Amount <input type="number" step="0.01" min="0" value={line.amount || ""} onChange={(e) => update(index, { amount: e.target.value })} /></label> : null}
+            {arrival ? <label className="check-label">Arrived <input type="checkbox" checked={line.reached !== false} onChange={(e) => update(index, { reached: e.target.checked })} /></label> : null}
             <label>Remarks <input value={line.remarks} onChange={(e) => update(index, { remarks: e.target.value })} /></label>
             <button type="button" className="icon-button" disabled={lines.length === 1} onClick={() => setLines(lines.filter((_, i) => i !== index))} title="Remove item line">
               <Trash2 size={16} />
@@ -390,7 +561,7 @@ function blankLine() {
 }
 
 function Requisitions({ user, data, api, refresh }) {
-  const [form, setForm] = useState({ requisitionNo: "", requestDate: today(), projectId: "", purpose: "" });
+  const [form, setForm] = useState({ requisitionNo: "", requestDate: today(), projectId: "", budgetHeadId: "", infrastructureId: "", purpose: "" });
   const [lines, setLines] = useState([blankLine(), blankLine()]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -401,7 +572,7 @@ function Requisitions({ user, data, api, refresh }) {
     setMessage("");
     try {
       const created = await api("/api/requisitions", { method: "POST", body: JSON.stringify({ ...form, lines }) });
-      setForm({ requisitionNo: "", requestDate: today(), projectId: "", purpose: "" });
+      setForm({ requisitionNo: "", requestDate: today(), projectId: "", budgetHeadId: "", infrastructureId: "", purpose: "" });
       setLines([blankLine(), blankLine()]);
       setMessage(`Requisition ${created.requisitionNo} submitted for store verification.`);
       await refresh("requisitions");
@@ -421,7 +592,11 @@ function Requisitions({ user, data, api, refresh }) {
           <div className="grid three">
             <label>Requisition No <input value={form.requisitionNo} onChange={(e) => setForm({ ...form, requisitionNo: e.target.value })} placeholder="Auto if blank" /></label>
             <label>Request Date <input type="date" value={form.requestDate} onChange={(e) => setForm({ ...form, requestDate: e.target.value })} /></label>
-            <label>Project <ProjectSelect projects={data.projects} value={form.projectId} onChange={(projectId) => setForm({ ...form, projectId })} /></label>
+            <label>Project <ProjectSelect projects={data.projects} value={form.projectId} onChange={(projectId) => setForm({ ...form, projectId, budgetHeadId: "", infrastructureId: "" })} /></label>
+          </div>
+          <div className="grid two">
+            <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} projectId={form.projectId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
+            <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
           </div>
           <label>Purpose <textarea rows="2" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} /></label>
           <LineEditor items={data.items} lines={lines} setLines={setLines} />
@@ -543,7 +718,7 @@ function ApprovalRow({ row, user, updateStatus }) {
 }
 
 function ReceiveStock({ data, api, refresh, setView }) {
-  const [form, setForm] = useState({ requisitionId: "", date: today(), projectId: "", supplier: "", challanNo: "", challanDate: "", dvNo: "", dvDate: "", billNo: "", billDate: "", remarks: "" });
+  const [form, setForm] = useState({ requisitionId: "", date: today(), projectId: "", budgetHeadId: "", infrastructureId: "", supplier: "", challanNo: "", challanDate: "", dvNo: "", dvDate: "", billNo: "", billDate: "", dispatchNo: "", remarks: "" });
   const [lines, setLines] = useState([blankLine()]);
   const [error, setError] = useState("");
   const approved = data.requisitions.filter((r) => ["APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(r.status));
@@ -552,12 +727,36 @@ function ReceiveStock({ data, api, refresh, setView }) {
     event.preventDefault();
     setError("");
     try {
-      await api("/api/receipts", { method: "POST", body: JSON.stringify({ ...form, lines }) });
+      const arrivedLines = lines.filter((line) => line.reached !== false);
+      await api("/api/receipts", { method: "POST", body: JSON.stringify({ ...form, lines: arrivedLines }) });
       setView("inventory");
       await refresh("inventory");
     } catch (err) {
       setError(err.message);
     }
+  }
+
+  function selectRequisition(requisitionId) {
+    const req = data.requisitions.find((entry) => entry.id === requisitionId);
+    if (!req) {
+      setForm({ ...form, requisitionId });
+      return;
+    }
+    setForm({
+      ...form,
+      requisitionId,
+      projectId: req.projectId || "",
+      budgetHeadId: req.budgetHeadId || "",
+      infrastructureId: req.infrastructureId || ""
+    });
+    setLines((req.lines || []).map((line) => ({
+      itemName: line.itemName,
+      specification: line.specification || "",
+      quantity: line.quantity,
+      unit: line.unit,
+      remarks: line.remarks || "",
+      reached: true
+    })));
   }
 
   return (
@@ -567,22 +766,27 @@ function ReceiveStock({ data, api, refresh, setView }) {
         <PanelTitle title="Receipt Details" subtitle="Use this screen only after the order has reached the store or site." />
         {error ? <div className="error">{error}</div> : null}
         <div className="grid four">
-          <label>Linked Requisition <select value={form.requisitionId} onChange={(e) => setForm({ ...form, requisitionId: e.target.value })}><option value="">No linked requisition</option>{approved.map((r) => <option key={r.id} value={r.id}>{r.requisitionNo} - {statusLabels[r.status]}</option>)}</select></label>
+          <label>Linked Requisition <select value={form.requisitionId} onChange={(e) => selectRequisition(e.target.value)}><option value="">No linked requisition</option>{approved.map((r) => <option key={r.id} value={r.id}>{r.requisitionNo} - {statusLabels[r.status]}</option>)}</select></label>
           <label>Receipt Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
           <label>Project <ProjectSelect projects={data.projects} value={form.projectId} onChange={(projectId) => setForm({ ...form, projectId })} /></label>
           <label>Supplier / Party <input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></label>
         </div>
-        <div className="grid three">
-          <label>Challan No <input value={form.challanNo} onChange={(e) => setForm({ ...form, challanNo: e.target.value })} /></label>
-          <label>DV No <input value={form.dvNo} onChange={(e) => setForm({ ...form, dvNo: e.target.value })} /></label>
-          <label>Bill No <input value={form.billNo} onChange={(e) => setForm({ ...form, billNo: e.target.value })} /></label>
+        <div className="grid two">
+          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} projectId={form.projectId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
+          <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
         </div>
         <div className="grid three">
+          <label>Challan No <input value={form.challanNo} onChange={(e) => setForm({ ...form, challanNo: e.target.value })} /></label>
+          <label>DV No(s) <input value={form.dvNo} onChange={(e) => setForm({ ...form, dvNo: e.target.value })} /></label>
+          <label>Bill No(s) <input value={form.billNo} onChange={(e) => setForm({ ...form, billNo: e.target.value })} /></label>
+        </div>
+        <div className="grid four">
           <label>Challan Date <input type="date" value={form.challanDate} onChange={(e) => setForm({ ...form, challanDate: e.target.value })} /></label>
           <label>DV Date <input type="date" value={form.dvDate} onChange={(e) => setForm({ ...form, dvDate: e.target.value })} /></label>
           <label>Bill Date <input type="date" value={form.billDate} onChange={(e) => setForm({ ...form, billDate: e.target.value })} /></label>
+          <label>Dispatch No <input value={form.dispatchNo} onChange={(e) => setForm({ ...form, dispatchNo: e.target.value })} /></label>
         </div>
-        <LineEditor items={data.items} lines={lines} setLines={setLines} receipt />
+        <LineEditor items={data.items} lines={lines} setLines={setLines} receipt arrival />
         <label>Remarks <textarea rows="2" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
         <button className="primary" type="submit">Record receipt</button>
       </form>
@@ -591,10 +795,26 @@ function ReceiveStock({ data, api, refresh, setView }) {
 }
 
 function Inventory({ data }) {
+  const [filters, setFilters] = useState({ budgetHeadId: "", infrastructureId: "", itemId: "" });
+  const filteredLedger = data.ledger.filter((row) => {
+    if (filters.budgetHeadId && row.budgetHeadId !== filters.budgetHeadId) return false;
+    if (filters.infrastructureId && row.infrastructureId !== filters.infrastructureId) return false;
+    if (filters.itemId && row.itemId !== filters.itemId) return false;
+    return true;
+  });
+  const rows = filters.budgetHeadId || filters.infrastructureId || filters.itemId ? summarizeLedger(filteredLedger) : data.inventory;
   return (
     <>
       <Header title="Inventory" eyebrow="Stock balance" subtitle="Current stock is calculated from every receipt and issue movement." />
-      <div className="panel"><PanelTitle title="Current Stock" subtitle="Search by item, category, or unit." /><InventoryTable rows={data.inventory} /></div>
+      <div className="panel">
+        <PanelTitle title="Filter by" subtitle="Budget head, key infrastructure, and item." />
+        <div className="grid three">
+          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={filters.budgetHeadId} onChange={(budgetHeadId) => setFilters({ ...filters, budgetHeadId, infrastructureId: "" })} /></label>
+          <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={filters.infrastructureId} budgetHeadId={filters.budgetHeadId} onChange={(infrastructureId) => setFilters({ ...filters, infrastructureId })} /></label>
+          <label>Item <select value={filters.itemId} onChange={(e) => setFilters({ ...filters, itemId: e.target.value })}><option value="">All items</option>{data.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        </div>
+      </div>
+      <div className="panel"><PanelTitle title="Current Stock" subtitle="Search by item, category, or unit." /><InventoryTable rows={rows} /></div>
       <div className="panel"><PanelTitle title="Recent Ledger" subtitle="Latest receipt and issue movements." /><LedgerTable rows={data.ledger.slice(0, 100)} /></div>
     </>
   );
@@ -629,7 +849,7 @@ function LedgerTable({ rows }) {
 }
 
 function IssueStock({ data, api, refresh, setView }) {
-  const [form, setForm] = useState({ date: today(), projectId: "", issueChallanNo: "", issuedTo: "", remarks: "" });
+  const [form, setForm] = useState({ date: today(), projectId: "", budgetHeadId: "", infrastructureId: "", issueChallanNo: "", issuedTo: "", remarks: "" });
   const [lines, setLines] = useState([blankLine()]);
   const [error, setError] = useState("");
 
@@ -653,9 +873,13 @@ function IssueStock({ data, api, refresh, setView }) {
         {error ? <div className="error">{error}</div> : null}
         <div className="grid four">
           <label>Issue Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
-          <label>Project <ProjectSelect projects={data.projects} value={form.projectId} onChange={(projectId) => setForm({ ...form, projectId })} /></label>
+          <label>Project <ProjectSelect projects={data.projects} value={form.projectId} onChange={(projectId) => setForm({ ...form, projectId, budgetHeadId: "", infrastructureId: "" })} /></label>
           <label>Issue Challan No <input value={form.issueChallanNo} onChange={(e) => setForm({ ...form, issueChallanNo: e.target.value })} /></label>
           <label>Issued To <input value={form.issuedTo} onChange={(e) => setForm({ ...form, issuedTo: e.target.value })} required /></label>
+        </div>
+        <div className="grid two">
+          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} projectId={form.projectId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
+          <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
         </div>
         <LineEditor items={data.items} lines={lines} setLines={setLines} />
         <label>Remarks <textarea rows="2" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>

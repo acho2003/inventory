@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 const storePath = path.join(root, "data", "store.json");
-const collections = ["users", "projects", "items", "requisitions", "receipts", "issues", "ledger", "expenses"];
+const collections = ["users", "projects", "budgetHeads", "infrastructures", "items", "requisitions", "receipts", "issues", "ledger", "expenses"];
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env before syncing.");
@@ -18,6 +18,20 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 });
 
 const store = JSON.parse(await fs.readFile(storePath, "utf8"));
+
+store.budgetHeads ||= [];
+store.infrastructures ||= [];
+if (!store.budgetHeads.length && Array.isArray(store.projects)) {
+  store.budgetHeads = store.projects.map((project) => ({
+    id: `bh-${String(project.id).replace(/^p-/, "")}`,
+    projectId: project.id,
+    name: project.name,
+    amount: Number(project.budget || 0),
+    createdBy: "system",
+    createdByName: "Imported record",
+    createdAt: store.meta?.importedAt || store.meta?.createdAt || new Date().toISOString()
+  }));
+}
 
 async function checked(label, query) {
   const result = await query;

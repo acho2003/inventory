@@ -23,7 +23,7 @@ const supabase = USE_SUPABASE
       auth: { persistSession: false, autoRefreshToken: false }
     })
   : null;
-const collections = ["users", "projects", "items", "requisitions", "receipts", "issues", "ledger", "expenses"];
+const collections = ["users", "projects", "budgetHeads", "infrastructures", "items", "requisitions", "receipts", "issues", "ledger", "expenses"];
 
 const sessions = new Map();
 
@@ -42,7 +42,15 @@ const rolePermissions = {
     "inventory:read",
     "report:read"
   ],
-  approver: ["requisition:read", "requisition:final_approve", "inventory:read", "report:read"]
+  approver: [
+    "requisition:read",
+    "requisition:final_approve",
+    "inventory:read",
+    "report:read",
+    "project:create",
+    "budget:create",
+    "infrastructure:create"
+  ]
 };
 
 const defaultStore = () => ({
@@ -64,6 +72,8 @@ const defaultStore = () => ({
     { id: "p-temp-shed", name: "PMU Temporary Shed", budget: 1480000 },
     { id: "p-mushroom", name: "Mushroom Shed", budget: 3449790 }
   ],
+  budgetHeads: [],
+  infrastructures: [],
   items: [
     { id: "i-diesel", name: "Diesel", category: "Fuel", unit: "Ltrs" },
     { id: "i-petrol", name: "Petrol", category: "Fuel", unit: "Ltrs" },
@@ -78,8 +88,40 @@ const defaultStore = () => ({
   issues: [],
   ledger: [],
   expenses: [],
-  counters: { requisition: 1, receipt: 1, issue: 1, movement: 1 }
+  counters: { requisition: 1, receipt: 1, issue: 1, movement: 1, project: 1, budgetHead: 1, infrastructure: 1 }
 });
+
+function normalizeStore(store) {
+  store.projects ||= [];
+  store.budgetHeads ||= [];
+  store.infrastructures ||= [];
+  store.items ||= [];
+  store.requisitions ||= [];
+  store.receipts ||= [];
+  store.issues ||= [];
+  store.ledger ||= [];
+  store.expenses ||= [];
+  store.counters ||= {};
+  for (const key of ["requisition", "receipt", "issue", "movement", "project", "budgetHead", "infrastructure"]) {
+    store.counters[key] ||= 1;
+  }
+  for (const project of store.projects) {
+    project.status ||= "Active";
+    project.budget = Number(project.budget || 0);
+  }
+  if (!store.budgetHeads.length && store.projects.length) {
+    store.budgetHeads = store.projects.map((project) => ({
+      id: `bh-${project.id.replace(/^p-/, "")}`,
+      projectId: project.id,
+      name: project.name,
+      amount: Number(project.budget || 0),
+      createdBy: "system",
+      createdByName: "Imported record",
+      createdAt: store.meta?.importedAt || store.meta?.createdAt || new Date().toISOString()
+    }));
+  }
+  return store;
+}
 
 async function ensureStore() {
   await fs.mkdir(DATA_DIR, { recursive: true });
@@ -114,11 +156,11 @@ async function readSupabaseStore() {
   if (!store.users.length) {
     const seeded = defaultStore();
     await writeSupabaseStore(seeded);
-    return seeded;
+    return normalizeStore(seeded);
   }
 
   store.users = sortByUpdatedData(store.users.map((data) => ({ data })));
-  return store;
+  return normalizeStore(store);
 }
 
 async function writeSupabaseStore(store) {
@@ -149,10 +191,11 @@ async function writeSupabaseStore(store) {
 async function readStore() {
   if (USE_SUPABASE) return readSupabaseStore();
   await ensureStore();
-  return JSON.parse(await fs.readFile(STORE_FILE, "utf8"));
+  return normalizeStore(JSON.parse(await fs.readFile(STORE_FILE, "utf8")));
 }
 
 async function writeStore(store) {
+  normalizeStore(store);
   store.meta.updatedAt = new Date().toISOString();
   if (USE_SUPABASE) {
     await writeSupabaseStore(store);
@@ -295,7 +338,7 @@ function dashboard(store) {
 }
 
 function addLedgerMovement(store, movement) {
-  store.ledger.push({
+    store.ledger.push({
     id: nextId(store, "movement", "MOV"),
     date: movement.date || new Date().toISOString().slice(0, 10),
     type: movement.type,
@@ -305,6 +348,8 @@ function addLedgerMovement(store, movement) {
     quantity: movement.quantity,
     unit: movement.unit || movement.item.unit,
     projectId: movement.projectId || "",
+    budgetHeadId: movement.budgetHeadId || "",
+    infrastructureId: movement.infrastructureId || "",
     referenceType: movement.referenceType,
     referenceId: movement.referenceId,
     documentNo: movement.documentNo || "",
@@ -330,6 +375,8 @@ async function routeApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/me") return sendJson(res, 200, cleanUser(user));
   if (req.method === "GET" && pathname === "/api/dashboard") return sendJson(res, 200, dashboard(store));
   if (req.method === "GET" && pathname === "/api/projects") return sendJson(res, 200, store.projects);
+  if (req.method === "GET" && pathname === "/api/budget-heads") return sendJson(res, 200, store.budgetHeads);
+  if (req.method === "GET" && pathname === "/api/infrastructures") return sendJson(res, 200, store.infrastructures);
   if (req.method === "GET" && pathname === "/api/items") return sendJson(res, 200, store.items.sort((a, b) => a.name.localeCompare(b.name)));
   if (req.method === "GET" && pathname === "/api/requisitions") return sendJson(res, 200, store.requisitions.slice().reverse());
   if (req.method === "GET" && pathname === "/api/receipts") return sendJson(res, 200, store.receipts.slice().reverse());
@@ -343,6 +390,68 @@ async function routeApi(req, res, pathname) {
       expenses: store.expenses.slice(0, 500),
       recentLedger: store.ledger.slice(-200).reverse()
     });
+  }
+
+  if (req.method === "POST" && pathname === "/api/projects") {
+    if (!hasPermission(user, "project:create")) return sendError(res, 403, "Only the final approver can add projects.");
+    const body = await readBody(req);
+    const name = normalizeText(body.name);
+    if (!name) return sendError(res, 400, "Project name is required.");
+    const project = {
+      id: nextId(store, "project", "PROJ"),
+      name,
+      budget: Number(body.budget || 0),
+      status: normalizeText(body.status || "Active"),
+      createdBy: user.id,
+      createdByName: user.name,
+      createdAt: new Date().toISOString()
+    };
+    store.projects.push(project);
+    await writeStore(store);
+    return sendJson(res, 201, project);
+  }
+
+  if (req.method === "POST" && pathname === "/api/budget-heads") {
+    if (!hasPermission(user, "budget:create")) return sendError(res, 403, "Only the final approver can add budget heads.");
+    const body = await readBody(req);
+    const name = normalizeText(body.name);
+    if (!name) return sendError(res, 400, "Budget head name is required.");
+    const budgetHead = {
+      id: nextId(store, "budgetHead", "BH"),
+      projectId: normalizeText(body.projectId),
+      name,
+      amount: Number(body.amount || 0),
+      createdBy: user.id,
+      createdByName: user.name,
+      createdAt: new Date().toISOString()
+    };
+    store.budgetHeads.push(budgetHead);
+    await writeStore(store);
+    return sendJson(res, 201, budgetHead);
+  }
+
+  if (req.method === "POST" && pathname === "/api/infrastructures") {
+    if (!hasPermission(user, "infrastructure:create")) return sendError(res, 403, "Only the final approver can add infrastructure.");
+    const body = await readBody(req);
+    const name = normalizeText(body.name);
+    const budgetHeadId = normalizeText(body.budgetHeadId);
+    if (!name) return sendError(res, 400, "Infrastructure name is required.");
+    if (!budgetHeadId) return sendError(res, 400, "Budget head is required.");
+    const budgetHead = store.budgetHeads.find((entry) => entry.id === budgetHeadId);
+    const infrastructure = {
+      id: nextId(store, "infrastructure", "INFRA"),
+      projectId: normalizeText(body.projectId || budgetHead?.projectId),
+      budgetHeadId,
+      name,
+      amount: Number(body.amount || 0),
+      status: normalizeText(body.status || "Active"),
+      createdBy: user.id,
+      createdByName: user.name,
+      createdAt: new Date().toISOString()
+    };
+    store.infrastructures.push(infrastructure);
+    await writeStore(store);
+    return sendJson(res, 201, infrastructure);
   }
 
   if (req.method === "POST" && pathname === "/api/requisitions") {
@@ -370,6 +479,8 @@ async function routeApi(req, res, pathname) {
       requestDate: body.requestDate || new Date().toISOString().slice(0, 10),
       receivedDate: body.receivedDate || "",
       projectId: normalizeText(body.projectId),
+      budgetHeadId: normalizeText(body.budgetHeadId),
+      infrastructureId: normalizeText(body.infrastructureId),
       purpose: normalizeText(body.purpose),
       status: "SUBMITTED",
       createdBy: user.id,
@@ -442,6 +553,8 @@ async function routeApi(req, res, pathname) {
       date: body.date || new Date().toISOString().slice(0, 10),
       requisitionId: body.requisitionId || "",
       projectId: normalizeText(body.projectId || requisition?.projectId),
+      budgetHeadId: normalizeText(body.budgetHeadId || requisition?.budgetHeadId),
+      infrastructureId: normalizeText(body.infrastructureId || requisition?.infrastructureId),
       supplier: normalizeText(body.supplier),
       challanNo: normalizeText(body.challanNo),
       challanDate: body.challanDate || "",
@@ -449,6 +562,7 @@ async function routeApi(req, res, pathname) {
       dvDate: body.dvDate || "",
       billNo: normalizeText(body.billNo),
       billDate: body.billDate || "",
+      dispatchNo: normalizeText(body.dispatchNo),
       receivedBy: user.id,
       receivedByName: user.name,
       remarks: normalizeText(body.remarks),
@@ -475,6 +589,8 @@ async function routeApi(req, res, pathname) {
         quantity,
         unit,
         projectId: receipt.projectId,
+        budgetHeadId: receipt.budgetHeadId,
+        infrastructureId: receipt.infrastructureId,
         referenceType: "receipt",
         referenceId: receipt.id,
         documentNo: receipt.challanNo,
@@ -499,6 +615,8 @@ async function routeApi(req, res, pathname) {
       id: nextId(store, "issue", "ISS"),
       date: body.date || new Date().toISOString().slice(0, 10),
       projectId: normalizeText(body.projectId),
+      budgetHeadId: normalizeText(body.budgetHeadId),
+      infrastructureId: normalizeText(body.infrastructureId),
       issueChallanNo: normalizeText(body.issueChallanNo),
       issuedTo: normalizeText(body.issuedTo),
       issuedBy: user.id,
@@ -528,6 +646,8 @@ async function routeApi(req, res, pathname) {
         quantity,
         unit,
         projectId: issue.projectId,
+        budgetHeadId: issue.budgetHeadId,
+        infrastructureId: issue.infrastructureId,
         referenceType: "issue",
         referenceId: issue.id,
         documentNo: issue.issueChallanNo,
