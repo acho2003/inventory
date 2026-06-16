@@ -109,12 +109,21 @@ function normalizeStore(store) {
     project.status ||= "Active";
     project.budget = Number(project.budget || 0);
   }
+  for (const budgetHead of store.budgetHeads) {
+    budgetHead.status ||= "Active";
+    budgetHead.amount = Number(budgetHead.amount || 0);
+  }
+  for (const infrastructure of store.infrastructures) {
+    infrastructure.status ||= "Active";
+    infrastructure.amount = Number(infrastructure.amount || 0);
+  }
   if (!store.budgetHeads.length && store.projects.length) {
     store.budgetHeads = store.projects.map((project) => ({
       id: `bh-${project.id.replace(/^p-/, "")}`,
       projectId: project.id,
       name: project.name,
       amount: Number(project.budget || 0),
+      status: project.status || "Active",
       createdBy: "system",
       createdByName: "Imported record",
       createdAt: store.meta?.importedAt || store.meta?.createdAt || new Date().toISOString()
@@ -421,6 +430,7 @@ async function routeApi(req, res, pathname) {
       projectId: normalizeText(body.projectId),
       name,
       amount: Number(body.amount || 0),
+      status: normalizeText(body.status || "Active"),
       createdBy: user.id,
       createdByName: user.name,
       createdAt: new Date().toISOString()
@@ -465,7 +475,8 @@ async function routeApi(req, res, pathname) {
         id: `rl-${crypto.randomUUID().slice(0, 8)}`,
         itemId: item.id,
         itemName: item.name,
-        specification: normalizeText(line.specification),
+        category: normalizeText(line.category || line.specification),
+        specification: normalizeText(line.category || line.specification),
         quantity: qtyNumber(line.quantity),
         unit: normalizeText(line.unit || item.unit),
         issuedTillDate: Number(line.issuedTillDate || 0),
@@ -575,7 +586,8 @@ async function routeApi(req, res, pathname) {
       receipt.lines.push({
         itemId: item.id,
         itemName: item.name,
-        specification: normalizeText(line.specification),
+        category: normalizeText(line.category || line.specification),
+        specification: normalizeText(line.category || line.specification),
         quantity,
         unit,
         rate: Number(line.rate || 0),
@@ -634,7 +646,8 @@ async function routeApi(req, res, pathname) {
       issue.lines.push({
         itemId: item.id,
         itemName: item.name,
-        specification: normalizeText(line.specification),
+        category: normalizeText(line.category || line.specification),
+        specification: normalizeText(line.category || line.specification),
         quantity,
         unit,
         remarks: normalizeText(line.remarks)

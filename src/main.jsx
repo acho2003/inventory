@@ -3,8 +3,6 @@ import { createRoot } from "react-dom/client";
 import {
   BarChart3,
   Boxes,
-  Building2,
-  ClipboardCheck,
   ClipboardList,
   FileDown,
   FolderKanban,
@@ -92,6 +90,46 @@ function summarizeLedger(rows = []) {
   return [...stock.values()].sort((a, b) => a.itemName.localeCompare(b.itemName));
 }
 
+function lineCategory(line = {}) {
+  return line.category || line.specification || "";
+}
+
+function amountUsedFor(receipts = [], field, id) {
+  return receipts
+    .filter((receipt) => receipt[field] === id)
+    .reduce((sum, receipt) => sum + (receipt.lines || []).reduce((lineSum, line) => lineSum + Number(line.amount || 0), 0), 0);
+}
+
+function budgetUsageRows(data) {
+  return data.budgetHeads.map((head) => {
+    const used = amountUsedFor(data.receipts, "budgetHeadId", head.id);
+    const amount = Number(head.amount || 0);
+    return {
+      id: head.id,
+      name: head.name,
+      amount,
+      status: head.status || "Active",
+      used,
+      balance: amount - used
+    };
+  });
+}
+
+function infrastructureUsageRows(data) {
+  return data.infrastructures.map((infra) => {
+    const used = amountUsedFor(data.receipts, "infrastructureId", infra.id);
+    const amount = Number(infra.amount || 0);
+    return {
+      id: infra.id,
+      name: infra.name,
+      amount,
+      status: infra.status || "Active",
+      used,
+      balance: amount - used
+    };
+  });
+}
+
 function useApi(token) {
   return useMemo(() => async (path, options = {}) => {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -157,21 +195,22 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem("yarju_token") || "");
   const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
-  const [data, setData] = useState({ dashboard: null, projects: [], budgetHeads: [], infrastructures: [], items: [], requisitions: [], inventory: [], ledger: [], reports: null });
+  const [data, setData] = useState({ dashboard: null, projects: [], budgetHeads: [], infrastructures: [], items: [], requisitions: [], receipts: [], inventory: [], ledger: [], reports: null });
   const [loading, setLoading] = useState(true);
   const api = useApi(token);
 
   async function loadBase() {
-    const [dashboard, projects, budgetHeads, infrastructures, items, requisitions, inventory] = await Promise.all([
+    const [dashboard, projects, budgetHeads, infrastructures, items, requisitions, receipts, inventory] = await Promise.all([
       api("/api/dashboard"),
       api("/api/projects"),
       api("/api/budget-heads"),
       api("/api/infrastructures"),
       api("/api/items"),
       api("/api/requisitions"),
+      api("/api/receipts"),
       api("/api/inventory")
     ]);
-    setData((prev) => ({ ...prev, dashboard, projects, budgetHeads, infrastructures, items, requisitions, inventory }));
+    setData((prev) => ({ ...prev, dashboard, projects, budgetHeads, infrastructures, items, requisitions, receipts, inventory }));
   }
 
   async function refresh(nextView = view) {
@@ -227,7 +266,7 @@ function App() {
 
   const navItems = [
     ["dashboard", "Dashboard", BarChart3, true],
-    ["projects", "Projects", FolderKanban, true],
+    ["projects", "Budget Heads", FolderKanban, true],
     ["requisitions", "Requisitions", ClipboardList, true],
     ["approvals", "Approvals", ShieldCheck, user.role !== "requester"],
     ["receive", "Receive Stock", PackageCheck, user.role === "store"],
@@ -297,6 +336,8 @@ function Dashboard({ data }) {
   const d = data.dashboard;
   if (!d) return <div className="panel">Loading dashboard...</div>;
   const urgent = data.requisitions.filter((r) => ["SUBMITTED", "STORE_VERIFIED", "APPROVED"].includes(r.status)).slice(0, 5);
+  const budgetRows = budgetUsageRows(data);
+  const infraRows = infrastructureUsageRows(data);
   return (
     <>
       <Header title="Dashboard" eyebrow="Operations overview" subtitle="Live status from requisitions, receipts, issues, and imported manual records." />
@@ -324,12 +365,44 @@ function Dashboard({ data }) {
           </div>
         </div>
       </div>
+      <div className="grid two">
+        <div className="panel">
+          <PanelTitle title="Budget Head Usage" subtitle="Amount used and balance by budget head." />
+          <UsageTable rows={budgetRows} emptyText="No budget heads yet." />
+        </div>
+        <div className="panel">
+          <PanelTitle title="Key Infrastructure Usage" subtitle="Amount used and balance by infrastructure." />
+          <UsageTable rows={infraRows} emptyText="No key infrastructure yet." />
+        </div>
+      </div>
     </>
   );
 }
 
 function Kpi({ label, value }) {
   return <div className="kpi"><span>{label}</span><strong>{num(value)}</strong></div>;
+}
+
+function UsageTable({ rows, emptyText }) {
+  if (!rows.length) return <div className="empty compact-empty">{emptyText}</div>;
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Amount</th><th>Used</th><th>Balance</th><th>Status</th></tr></thead>
+        <tbody>
+          {rows.slice(0, 12).map((row) => (
+            <tr key={row.id}>
+              <td><strong>{row.name}</strong></td>
+              <td>{num(row.amount)}</td>
+              <td>{num(row.used)}</td>
+              <td><strong className={row.balance < 0 ? "negative" : "positive"}>{num(row.balance)}</strong></td>
+              <td><span className="status">{row.status}</span></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 function WorkflowStrip() {
@@ -378,17 +451,8 @@ function CompactRequestList({ rows }) {
   );
 }
 
-function ProjectSelect({ projects, value, onChange }) {
-  return (
-    <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
-      <option value="">Select project</option>
-      {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-    </select>
-  );
-}
-
-function BudgetHeadSelect({ budgetHeads, value, onChange, projectId = "" }) {
-  const rows = budgetHeads.filter((entry) => !projectId || !entry.projectId || entry.projectId === projectId);
+function BudgetHeadSelect({ budgetHeads, value, onChange }) {
+  const rows = budgetHeads;
   return (
     <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
       <option value="">Select budget head</option>
@@ -408,32 +472,25 @@ function InfrastructureSelect({ infrastructures, value, onChange, budgetHeadId =
 }
 
 function ProjectsPage({ user, data, api, refresh }) {
-  const [selectedProjectId, setSelectedProjectId] = useState(data.projects[0]?.id || "");
-  const [projectForm, setProjectForm] = useState({ name: "", budget: "", status: "Active" });
-  const [budgetForm, setBudgetForm] = useState({ projectId: "", name: "", amount: "" });
-  const [infraForm, setInfraForm] = useState({ projectId: "", budgetHeadId: "", name: "", amount: "", status: "Active" });
+  const [selectedBudgetHeadId, setSelectedBudgetHeadId] = useState(data.budgetHeads[0]?.id || "");
+  const [budgetForm, setBudgetForm] = useState({ name: "", amount: "", status: "Active" });
+  const [infraForm, setInfraForm] = useState({ budgetHeadId: "", name: "", amount: "", status: "Active" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const projectMap = byId(data.projects);
-  const selectedProject = projectMap[selectedProjectId] || data.projects[0];
-  const budgetRows = data.budgetHeads.filter((entry) => !selectedProject?.id || entry.projectId === selectedProject.id || !entry.projectId);
-  const infraRows = data.infrastructures.filter((entry) => !selectedProject?.id || entry.projectId === selectedProject.id || budgetRows.some((head) => head.id === entry.budgetHeadId));
-  const ordered = data.requisitions.filter((req) => req.projectId === selectedProject?.id || budgetRows.some((head) => head.id === req.budgetHeadId));
-  const ledgerRows = data.ledger.filter((row) => row.projectId === selectedProject?.id || budgetRows.some((head) => head.id === row.budgetHeadId));
-
-  async function submitProject(event) {
-    event.preventDefault();
-    await submitEntity("/api/projects", projectForm, () => setProjectForm({ name: "", budget: "", status: "Active" }), "Project added.");
-  }
+  const budgetMap = byId(data.budgetHeads);
+  const selectedBudgetHead = budgetMap[selectedBudgetHeadId] || data.budgetHeads[0];
+  const infraRows = data.infrastructures.filter((entry) => entry.budgetHeadId === selectedBudgetHead?.id);
+  const ordered = data.requisitions.filter((req) => req.budgetHeadId === selectedBudgetHead?.id);
+  const ledgerRows = data.ledger.filter((row) => row.budgetHeadId === selectedBudgetHead?.id);
 
   async function submitBudget(event) {
     event.preventDefault();
-    await submitEntity("/api/budget-heads", budgetForm, () => setBudgetForm({ projectId: "", name: "", amount: "" }), "Budget head added.");
+    await submitEntity("/api/budget-heads", budgetForm, () => setBudgetForm({ name: "", amount: "", status: "Active" }), "Budget head added.");
   }
 
   async function submitInfra(event) {
     event.preventDefault();
-    await submitEntity("/api/infrastructures", infraForm, () => setInfraForm({ projectId: "", budgetHeadId: "", name: "", amount: "", status: "Active" }), "Infrastructure added.");
+    await submitEntity("/api/infrastructures", infraForm, () => setInfraForm({ budgetHeadId: "", name: "", amount: "", status: "Active" }), "Infrastructure added.");
   }
 
   async function submitEntity(path, body, reset, okMessage) {
@@ -451,56 +508,49 @@ function ProjectsPage({ user, data, api, refresh }) {
 
   return (
     <>
-      <Header title="Projects" eyebrow="Key activities" subtitle="Projects contain budget heads, infrastructure activities, ordered items, and issued stock." />
+      <Header title="Budget Heads" eyebrow="Key activities" subtitle="Manage budget heads and key infrastructure activities." />
       {message ? <div className="success">{message}</div> : null}
       {error ? <div className="error">{error}</div> : null}
       {user.role === "approver" ? (
-        <div className="grid three">
-          <form className="panel grid" onSubmit={submitProject}>
-            <PanelTitle title="New Project" />
-            <label>Project Name <input value={projectForm.name} onChange={(e) => setProjectForm({ ...projectForm, name: e.target.value })} required /></label>
-            <label>Budget <input type="number" min="0" step="0.01" value={projectForm.budget} onChange={(e) => setProjectForm({ ...projectForm, budget: e.target.value })} /></label>
-            <label>Status <select value={projectForm.status} onChange={(e) => setProjectForm({ ...projectForm, status: e.target.value })}><option>Active</option><option>Pending</option><option>Closed</option></select></label>
-            <button className="primary" type="submit">Add project</button>
-          </form>
+        <div className="grid two">
           <form className="panel grid" onSubmit={submitBudget}>
             <PanelTitle title="Add Budget Head" />
-            <label>Project <ProjectSelect projects={data.projects} value={budgetForm.projectId} onChange={(projectId) => setBudgetForm({ ...budgetForm, projectId })} /></label>
-            <label>Budget Name <input value={budgetForm.name} onChange={(e) => setBudgetForm({ ...budgetForm, name: e.target.value })} required /></label>
-            <label>Budget Amount <input type="number" min="0" step="0.01" value={budgetForm.amount} onChange={(e) => setBudgetForm({ ...budgetForm, amount: e.target.value })} /></label>
+            <label>Budget Head Name <input value={budgetForm.name} onChange={(e) => setBudgetForm({ ...budgetForm, name: e.target.value })} required /></label>
+            <label>Amount <input type="number" min="0" step="0.01" value={budgetForm.amount} onChange={(e) => setBudgetForm({ ...budgetForm, amount: e.target.value })} /></label>
+            <label>Status <select value={budgetForm.status} onChange={(e) => setBudgetForm({ ...budgetForm, status: e.target.value })}><option>Active</option><option>Pending</option><option>Closed</option></select></label>
             <button className="primary" type="submit">Add budget head</button>
           </form>
           <form className="panel grid" onSubmit={submitInfra}>
             <PanelTitle title="Add Key Infrastructure" />
-            <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={infraForm.budgetHeadId} onChange={(budgetHeadId) => {
-              const head = data.budgetHeads.find((entry) => entry.id === budgetHeadId);
-              setInfraForm({ ...infraForm, budgetHeadId, projectId: head?.projectId || infraForm.projectId });
-            }} /></label>
+            <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={infraForm.budgetHeadId} onChange={(budgetHeadId) => setInfraForm({ ...infraForm, budgetHeadId })} /></label>
             <label>Infrastructure Name <input value={infraForm.name} onChange={(e) => setInfraForm({ ...infraForm, name: e.target.value })} required /></label>
             <label>Amount <input type="number" min="0" step="0.01" value={infraForm.amount} onChange={(e) => setInfraForm({ ...infraForm, amount: e.target.value })} /></label>
+            <label>Status <select value={infraForm.status} onChange={(e) => setInfraForm({ ...infraForm, status: e.target.value })}><option>Active</option><option>Pending</option><option>Closed</option></select></label>
             <button className="primary" type="submit">Add infrastructure</button>
           </form>
         </div>
       ) : null}
       <div className="grid two">
         <div className="panel">
-          <PanelTitle title="Projects" />
+          <PanelTitle title="Budget Heads" subtitle="Budget head name, amount, and status." />
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Project Name</th><th>Budget</th><th>Used</th><th>Status</th></tr></thead>
-              <tbody>{data.projects.map((project) => {
-                const used = data.ledger.filter((row) => row.projectId === project.id && row.type === "ISSUE").reduce((sum, row) => sum + Number(row.quantity || 0), 0);
-                return <tr key={project.id} className={project.id === selectedProject?.id ? "selected-row" : ""} onClick={() => setSelectedProjectId(project.id)}><td><strong>{project.name}</strong></td><td>{num(project.budget)}</td><td>{num(used)}</td><td>{project.status || "Active"}</td></tr>;
-              })}</tbody>
+              <thead><tr><th>Budget Head Name</th><th>Amount</th><th>Status</th></tr></thead>
+              <tbody>{data.budgetHeads.map((head) => (
+                <tr key={head.id} className={head.id === selectedBudgetHead?.id ? "selected-row" : ""} onClick={() => setSelectedBudgetHeadId(head.id)}>
+                  <td><strong>{head.name}</strong></td>
+                  <td>{num(head.amount)}</td>
+                  <td><span className="status">{head.status || "Active"}</span></td>
+                </tr>
+              ))}</tbody>
             </table>
           </div>
         </div>
         <div className="panel">
-          <PanelTitle title={selectedProject?.name || "Project Detail"} subtitle="Budget heads, infrastructure, ordered items, and issued items." />
+          <PanelTitle title={selectedBudgetHead?.name || "Budget Head Detail"} subtitle="Key infrastructure, ordered items, and issued items." />
           <div className="detail-stack">
-            <DetailBlock title="Budget Heads" rows={budgetRows.map((row) => `${row.name} - ${num(row.amount)}`)} />
-            <DetailBlock title="Infrastructure Activities" rows={infraRows.map((row) => `${row.name} - ${num(row.amount)}`)} />
-            <DetailBlock title="Ordered Items" rows={ordered.flatMap((req) => (req.lines || []).map((line) => `${req.requisitionNo}: ${line.itemName} (${num(line.quantity)} ${line.unit})`)).slice(0, 12)} />
+            <DetailBlock title="Infrastructure Activities" rows={infraRows.map((row) => `${row.name} - ${num(row.amount)} - ${row.status || "Active"}`)} />
+            <DetailBlock title="Ordered Items" rows={ordered.flatMap((req) => (req.lines || []).map((line) => `${req.requisitionNo}: ${line.itemName} (${lineCategory(line) || "No category"}) - ${num(line.quantity)} ${line.unit}`)).slice(0, 12)} />
             <DetailBlock title="Issued Items" rows={ledgerRows.filter((row) => row.type === "ISSUE").map((row) => `${row.itemName} (${num(row.quantity)} ${row.unit})`).slice(0, 12)} />
           </div>
         </div>
@@ -539,7 +589,7 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false }
         {lines.map((line, index) => (
           <div className={`line-row ${receipt ? "receipt-line" : ""}`} key={index}>
             <label>Item <input list="itemOptions" value={line.itemName} onChange={(e) => update(index, { itemName: e.target.value })} required /></label>
-            <label>Specification <input value={line.specification} onChange={(e) => update(index, { specification: e.target.value })} /></label>
+            <label>Category <input value={line.category ?? line.specification ?? ""} onChange={(e) => update(index, { category: e.target.value, specification: e.target.value })} /></label>
             <label>Qty <input type="number" step="0.01" min="0.01" value={line.quantity} onChange={(e) => update(index, { quantity: e.target.value })} required /></label>
             <label>Unit <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} /></label>
             {receipt ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => update(index, { rate: e.target.value })} /></label> : null}
@@ -557,11 +607,11 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false }
 }
 
 function blankLine() {
-  return { itemName: "", specification: "", quantity: "", unit: "", remarks: "" };
+  return { itemName: "", category: "", specification: "", quantity: "", unit: "", remarks: "" };
 }
 
 function Requisitions({ user, data, api, refresh }) {
-  const [form, setForm] = useState({ requisitionNo: "", requestDate: today(), projectId: "", budgetHeadId: "", infrastructureId: "", purpose: "" });
+  const [form, setForm] = useState({ requisitionNo: "", requestDate: today(), budgetHeadId: "", infrastructureId: "", purpose: "" });
   const [lines, setLines] = useState([blankLine(), blankLine()]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -572,7 +622,7 @@ function Requisitions({ user, data, api, refresh }) {
     setMessage("");
     try {
       const created = await api("/api/requisitions", { method: "POST", body: JSON.stringify({ ...form, lines }) });
-      setForm({ requisitionNo: "", requestDate: today(), projectId: "", budgetHeadId: "", infrastructureId: "", purpose: "" });
+      setForm({ requisitionNo: "", requestDate: today(), budgetHeadId: "", infrastructureId: "", purpose: "" });
       setLines([blankLine(), blankLine()]);
       setMessage(`Requisition ${created.requisitionNo} submitted for store verification.`);
       await refresh("requisitions");
@@ -589,13 +639,12 @@ function Requisitions({ user, data, api, refresh }) {
           <PanelTitle title="New Requisition" subtitle="Enter the request details. Document numbers are added only when stock is received." />
           {message ? <div className="success">{message}</div> : null}
           {error ? <div className="error">{error}</div> : null}
-          <div className="grid three">
+          <div className="grid two">
             <label>Requisition No <input value={form.requisitionNo} onChange={(e) => setForm({ ...form, requisitionNo: e.target.value })} placeholder="Auto if blank" /></label>
             <label>Request Date <input type="date" value={form.requestDate} onChange={(e) => setForm({ ...form, requestDate: e.target.value })} /></label>
-            <label>Project <ProjectSelect projects={data.projects} value={form.projectId} onChange={(projectId) => setForm({ ...form, projectId, budgetHeadId: "", infrastructureId: "" })} /></label>
           </div>
           <div className="grid two">
-            <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} projectId={form.projectId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
+            <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
             <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
           </div>
           <label>Purpose <textarea rows="2" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} /></label>
@@ -702,9 +751,7 @@ function ApprovalRow({ row, user, updateStatus }) {
         </div>
         <span className={`status ${row.status}`}>{statusLabels[row.status] || row.status}</span>
       </div>
-      <div className="approval-items">
-        {row.lines?.map((l) => <span key={l.id || l.itemName}>{l.itemName} - {num(l.quantity)} {l.unit}</span>)}
-      </div>
+      <OrderedItemsTable lines={row.lines || []} />
       <div>
         <div className="actions">
           {user.role === "store" && row.status === "SUBMITTED" ? <button className="primary" onClick={() => updateStatus(row.id, "verify")}>Verify</button> : null}
@@ -717,8 +764,30 @@ function ApprovalRow({ row, user, updateStatus }) {
   );
 }
 
+function OrderedItemsTable({ lines }) {
+  if (!lines.length) return <div className="empty compact-empty">No ordered items.</div>;
+  return (
+    <div className="table-wrap compact-table">
+      <table>
+        <thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Unit</th><th>Remarks</th></tr></thead>
+        <tbody>
+          {lines.map((line) => (
+            <tr key={line.id || `${line.itemName}-${line.quantity}`}>
+              <td><strong>{line.itemName}</strong></td>
+              <td>{fmt(lineCategory(line))}</td>
+              <td>{num(line.quantity)}</td>
+              <td>{fmt(line.unit)}</td>
+              <td>{fmt(line.remarks)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ReceiveStock({ data, api, refresh, setView }) {
-  const [form, setForm] = useState({ requisitionId: "", date: today(), projectId: "", budgetHeadId: "", infrastructureId: "", supplier: "", challanNo: "", challanDate: "", dvNo: "", dvDate: "", billNo: "", billDate: "", dispatchNo: "", remarks: "" });
+  const [form, setForm] = useState({ requisitionId: "", date: today(), budgetHeadId: "", infrastructureId: "", supplier: "", challanNo: "", challanDate: "", dvNo: "", dvDate: "", billNo: "", billDate: "", dispatchNo: "", remarks: "" });
   const [lines, setLines] = useState([blankLine()]);
   const [error, setError] = useState("");
   const approved = data.requisitions.filter((r) => ["APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(r.status));
@@ -745,13 +814,13 @@ function ReceiveStock({ data, api, refresh, setView }) {
     setForm({
       ...form,
       requisitionId,
-      projectId: req.projectId || "",
       budgetHeadId: req.budgetHeadId || "",
       infrastructureId: req.infrastructureId || ""
     });
     setLines((req.lines || []).map((line) => ({
       itemName: line.itemName,
-      specification: line.specification || "",
+      category: lineCategory(line),
+      specification: lineCategory(line),
       quantity: line.quantity,
       unit: line.unit,
       remarks: line.remarks || "",
@@ -768,11 +837,10 @@ function ReceiveStock({ data, api, refresh, setView }) {
         <div className="grid four">
           <label>Linked Requisition <select value={form.requisitionId} onChange={(e) => selectRequisition(e.target.value)}><option value="">No linked requisition</option>{approved.map((r) => <option key={r.id} value={r.id}>{r.requisitionNo} - {statusLabels[r.status]}</option>)}</select></label>
           <label>Receipt Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
-          <label>Project <ProjectSelect projects={data.projects} value={form.projectId} onChange={(projectId) => setForm({ ...form, projectId })} /></label>
           <label>Supplier / Party <input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></label>
         </div>
         <div className="grid two">
-          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} projectId={form.projectId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
+          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
           <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
         </div>
         <div className="grid three">
@@ -849,7 +917,7 @@ function LedgerTable({ rows }) {
 }
 
 function IssueStock({ data, api, refresh, setView }) {
-  const [form, setForm] = useState({ date: today(), projectId: "", budgetHeadId: "", infrastructureId: "", issueChallanNo: "", issuedTo: "", remarks: "" });
+  const [form, setForm] = useState({ date: today(), budgetHeadId: "", infrastructureId: "", issueChallanNo: "", issuedTo: "", remarks: "" });
   const [lines, setLines] = useState([blankLine()]);
   const [error, setError] = useState("");
 
@@ -873,12 +941,11 @@ function IssueStock({ data, api, refresh, setView }) {
         {error ? <div className="error">{error}</div> : null}
         <div className="grid four">
           <label>Issue Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
-          <label>Project <ProjectSelect projects={data.projects} value={form.projectId} onChange={(projectId) => setForm({ ...form, projectId, budgetHeadId: "", infrastructureId: "" })} /></label>
           <label>Issue Challan No <input value={form.issueChallanNo} onChange={(e) => setForm({ ...form, issueChallanNo: e.target.value })} /></label>
           <label>Issued To <input value={form.issuedTo} onChange={(e) => setForm({ ...form, issuedTo: e.target.value })} required /></label>
         </div>
         <div className="grid two">
-          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} projectId={form.projectId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
+          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
           <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
         </div>
         <LineEditor items={data.items} lines={lines} setLines={setLines} />
@@ -896,7 +963,7 @@ function Reports({ data }) {
     <>
       <Header title="Reports" eyebrow="Audit view" subtitle="Imported manual expense records and recent stock movements." />
       <div className="grid two">
-        <div className="panel"><PanelTitle title="Project Budgets" /><div className="table-wrap"><table><thead><tr><th>Project</th><th>Budget</th></tr></thead><tbody>{reports.projects.map((p) => <tr key={p.id}><td>{p.name}</td><td>{num(p.budget)}</td></tr>)}</tbody></table></div></div>
+        <div className="panel"><PanelTitle title="Budget Heads" /><div className="table-wrap"><table><thead><tr><th>Budget Head</th><th>Amount</th><th>Status</th></tr></thead><tbody>{data.budgetHeads.map((head) => <tr key={head.id}><td>{head.name}</td><td>{num(head.amount)}</td><td>{head.status || "Active"}</td></tr>)}</tbody></table></div></div>
         <div className="panel"><PanelTitle title="Document Coverage" /><table><tbody><tr><th>Receipts with Challan No</th><td>{num(reports.dashboard.documents.receiptsWithChallan)}</td></tr><tr><th>Receipts with DV No</th><td>{num(reports.dashboard.documents.receiptsWithDv)}</td></tr><tr><th>Receipts with Bill No</th><td>{num(reports.dashboard.documents.receiptsWithBill)}</td></tr></tbody></table></div>
       </div>
       <div className="panel">
