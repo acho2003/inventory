@@ -22,22 +22,49 @@ const statusLabels = {
   APPROVED: "Final approved",
   ORDERED: "Order placed",
   PARTIALLY_RECEIVED: "Partly received",
+  RECEIVED: "Received",
   CLOSED: "Closed",
   REJECTED: "Rejected",
   IMPORTED_FOLLOW_UP: "Imported follow-up"
 };
 
+const itemCategories = [
+  "Fuel & Lubricants",
+  "Blasting Materials",
+  "Equipment & Vehicle Hiring Charges",
+  "Transportation Charges",
+  "Construction Materials",
+  "Plumbing Materials",
+  "Tools & Equipments",
+  "Office Stationery",
+  "Miscellaneous",
+  "Electrical Items",
+  "Paints & Coatings",
+  "Fastening & Joining Materials",
+  "Sanitary Materials",
+  "Accommodation & Kitchen Supplies",
+  "Operating Expenses",
+  "Ritual Expenses",
+  "Tax (GST)"
+];
+
 const demoUsers = {
+  admin: ["admin", "admin123"],
   requester: ["requester", "request123"],
   store: ["store", "store123"],
   approver: ["approver", "approve123"]
 };
 
 const roleLabels = {
+  admin: "Admin",
   requester: "Requisition",
   store: "Store / PMU",
   approver: "Final Approver"
 };
+
+function can(user, permission) {
+  return Boolean(user?.permissions?.includes(permission));
+}
 
 function today() {
   return new Date().toISOString().slice(0, 10);
@@ -100,6 +127,14 @@ function amountUsedFor(receipts = [], field, id) {
     .reduce((sum, receipt) => sum + (receipt.lines || []).reduce((lineSum, line) => lineSum + Number(line.amount || 0), 0), 0);
 }
 
+function requisitionReceivedQty(receipts = [], requisitionId, itemId) {
+  return receipts
+    .filter((receipt) => receipt.requisitionId === requisitionId)
+    .reduce((sum, receipt) => sum + (receipt.lines || [])
+      .filter((line) => line.itemId === itemId)
+      .reduce((lineSum, line) => lineSum + Number(line.quantity || 0), 0), 0);
+}
+
 function budgetUsageRows(data) {
   return data.budgetHeads.map((head) => {
     const used = amountUsedFor(data.receipts, "budgetHeadId", head.id);
@@ -155,6 +190,15 @@ function Login({ onLogin }) {
     }
   }
 
+  async function demoLogin(key) {
+    setError("");
+    try {
+      await onLogin(...demoUsers[key]);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   return (
     <section className="login">
       <div className="login-panel">
@@ -179,7 +223,7 @@ function Login({ onLogin }) {
           <button className="primary" type="submit">Sign in</button>
           <div className="demo-users">
             {Object.keys(demoUsers).map((key) => (
-              <button key={key} type="button" onClick={() => onLogin(...demoUsers[key])}>
+              <button key={key} type="button" onClick={() => demoLogin(key)}>
                 <strong>{roleLabels[key]}</strong>
                 <span>{demoUsers[key][0]}</span>
               </button>
@@ -268,11 +312,11 @@ function App() {
     ["dashboard", "Dashboard", BarChart3, true],
     ["projects", "Budget Heads", FolderKanban, true],
     ["requisitions", "Requisitions", ClipboardList, true],
-    ["approvals", "Approvals", ShieldCheck, user.role !== "requester"],
-    ["receive", "Receive Stock", PackageCheck, user.role === "store"],
+    ["approvals", "Approvals", ShieldCheck, can(user, "requisition:first_approve") || can(user, "requisition:final_approve")],
+    ["receive", "Receive Stock", PackageCheck, can(user, "receipt:create")],
     ["inventory", "Inventory", Boxes, true],
-    ["issue", "Issue Stock", PackageMinus, user.role === "store"],
-    ["reports", "Reports", FileDown, user.role !== "requester"]
+    ["issue", "Issue Stock", PackageMinus, can(user, "issue:create")],
+    ["reports", "Reports", FileDown, can(user, "report:read")]
   ];
 
   return (
@@ -348,6 +392,16 @@ function Dashboard({ data }) {
         <Kpi label="Low / Zero Stock" value={d.inventory.lowStock} />
       </div>
       <WorkflowStrip />
+      <div className="grid two">
+        <div className="panel">
+          <PanelTitle title="Budget Head Chart" subtitle="Used amount and remaining balance for each budget head." />
+          <UsageBarChart rows={budgetRows} emptyText="No budget heads yet." />
+        </div>
+        <div className="panel">
+          <PanelTitle title="Key Infrastructure Chart" subtitle="Used amount and remaining balance for each infrastructure." />
+          <UsageBarChart rows={infraRows} emptyText="No key infrastructure yet." />
+        </div>
+      </div>
       <div className="grid three">
         <div className="panel">
           <PanelTitle title="Needs Attention" subtitle="Requests waiting for verification, approval, or order placement." />
@@ -405,12 +459,44 @@ function UsageTable({ rows, emptyText }) {
   );
 }
 
+function UsageBarChart({ rows, emptyText }) {
+  if (!rows.length) return <div className="empty compact-empty">{emptyText}</div>;
+  return (
+    <div className="usage-chart">
+      {rows.slice(0, 10).map((row) => {
+        const used = Math.max(0, Number(row.used || 0));
+        const balance = Math.max(0, Number(row.balance || 0));
+        const total = Math.max(used + balance, Number(row.amount || 0), 1);
+        const usedPct = Math.min(100, (used / total) * 100);
+        const balancePct = Math.max(0, 100 - usedPct);
+        return (
+          <div className="usage-bar-row" key={row.id}>
+            <div className="usage-bar-head">
+              <strong>{row.name}</strong>
+              <span>{num(row.amount)}</span>
+            </div>
+            <div className="stacked-bar" aria-label={`${row.name}: used ${num(used)}, balance ${num(balance)}`}>
+              <span className="bar-used" style={{ width: `${usedPct}%` }} />
+              <span className="bar-balance" style={{ width: `${balancePct}%` }} />
+            </div>
+            <div className="usage-legend">
+              <span><i className="legend-used" /> Used {num(used)}</span>
+              <span><i className="legend-balance" /> Balance {num(row.balance)}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function WorkflowStrip() {
   const steps = [
     ["Request", "Requester enters item needs"],
     ["Verify", "Store checks request"],
     ["Approve", "Final approver signs off"],
-    ["Receive", "Store enters Challan, DV, Bill"]
+    ["Receive", "Store records arrivals"],
+    ["Issue", "Release to infrastructure and duty person"]
   ];
   return (
     <div className="workflow-strip">
@@ -511,7 +597,7 @@ function ProjectsPage({ user, data, api, refresh }) {
       <Header title="Budget Heads" eyebrow="Key activities" subtitle="Manage budget heads and key infrastructure activities." />
       {message ? <div className="success">{message}</div> : null}
       {error ? <div className="error">{error}</div> : null}
-      {user.role === "approver" ? (
+      {can(user, "budget:create") || can(user, "infrastructure:create") ? (
         <div className="grid two">
           <form className="panel grid" onSubmit={submitBudget}>
             <PanelTitle title="Add Budget Head" />
@@ -589,7 +675,12 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false }
         {lines.map((line, index) => (
           <div className={`line-row ${receipt ? "receipt-line" : ""}`} key={index}>
             <label>Item <input list="itemOptions" value={line.itemName} onChange={(e) => update(index, { itemName: e.target.value })} required /></label>
-            <label>Category <input value={line.category ?? line.specification ?? ""} onChange={(e) => update(index, { category: e.target.value, specification: e.target.value })} /></label>
+            <label>Category
+              <select value={line.category ?? line.specification ?? ""} onChange={(e) => update(index, { category: e.target.value, specification: e.target.value })}>
+                <option value="">Select category</option>
+                {itemCategories.map((category) => <option key={category} value={category}>{category}</option>)}
+              </select>
+            </label>
             <label>Qty <input type="number" step="0.01" min="0.01" value={line.quantity} onChange={(e) => update(index, { quantity: e.target.value })} required /></label>
             <label>Unit <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} /></label>
             {receipt ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => update(index, { rate: e.target.value })} /></label> : null}
@@ -634,31 +725,82 @@ function Requisitions({ user, data, api, refresh }) {
   return (
     <>
       <Header title="Requisitions" eyebrow="Request materials" subtitle="Order request, store verification, final approval, then order placement." />
-      {user.role === "requester" ? (
-        <form className="panel grid" onSubmit={submit}>
-          <PanelTitle title="New Requisition" subtitle="Enter the request details. Document numbers are added only when stock is received." />
-          {message ? <div className="success">{message}</div> : null}
-          {error ? <div className="error">{error}</div> : null}
-          <div className="grid two">
-            <label>Requisition No <input value={form.requisitionNo} onChange={(e) => setForm({ ...form, requisitionNo: e.target.value })} placeholder="Auto if blank" /></label>
-            <label>Request Date <input type="date" value={form.requestDate} onChange={(e) => setForm({ ...form, requestDate: e.target.value })} /></label>
+      <div className="requisition-workspace">
+        <ApprovalStatusPanel requisitions={data.requisitions} receipts={data.receipts} />
+        {can(user, "requisition:create") ? (
+          <form className="panel grid requisition-form-panel" onSubmit={submit}>
+            <PanelTitle title="New Requisition" subtitle="Enter the request details. Document numbers are added only when stock is received." />
+            {message ? <div className="success">{message}</div> : null}
+            {error ? <div className="error">{error}</div> : null}
+            <div className="grid two">
+              <label>Requisition No <input value={form.requisitionNo} onChange={(e) => setForm({ ...form, requisitionNo: e.target.value })} placeholder="Auto if blank" /></label>
+              <label>Request Date <input type="date" value={form.requestDate} onChange={(e) => setForm({ ...form, requestDate: e.target.value })} /></label>
+            </div>
+            <div className="grid two">
+              <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
+              <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
+            </div>
+            <label>Purpose <textarea rows="2" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} /></label>
+            <LineEditor items={data.items} lines={lines} setLines={setLines} />
+            <div className="notice">Challan No, DV No, and Bill No are recorded only when approved stock reaches the store.</div>
+            <button className="primary" type="submit">Submit requisition</button>
+          </form>
+        ) : (
+          <div className="panel">
+            <PanelTitle title="Requisition Register" subtitle="Your role can review status, approvals, and receipt progress here." />
+            <div className="notice">Use the Approvals, Receive Stock, and Issue Stock screens to move approved items through the store and into key infrastructures.</div>
           </div>
-          <div className="grid two">
-            <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
-            <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
-          </div>
-          <label>Purpose <textarea rows="2" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} /></label>
-          <LineEditor items={data.items} lines={lines} setLines={setLines} />
-          <div className="notice">Challan No, DV No, and Bill No are recorded only when approved stock reaches the store.</div>
-          <button className="primary" type="submit">Submit requisition</button>
-        </form>
-      ) : null}
-      <div className="panel"><PanelTitle title="All Requisitions" subtitle="Search by request number, item, status, purpose, or supply order." /><RequisitionTable rows={data.requisitions} /></div>
+        )}
+      </div>
+      <div className="panel"><PanelTitle title="All Requisitions" subtitle="Search by request number, item, status, purpose, or supply order." /><RequisitionTable rows={data.requisitions} receipts={data.receipts} /></div>
     </>
   );
 }
 
-function RequisitionTable({ rows, compact = false }) {
+function ApprovalStatusPanel({ requisitions, receipts }) {
+  const active = requisitions.filter((r) => ["SUBMITTED", "STORE_VERIFIED", "APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(r.status)).slice(0, 6);
+  const statuses = ["SUBMITTED", "STORE_VERIFIED", "APPROVED", "REJECTED", "PARTIALLY_RECEIVED", "RECEIVED"];
+  return (
+    <aside className="panel approval-status-panel">
+      <PanelTitle title="Approvals" subtitle="Status is visible to requester, store, approver, and admin." />
+      <div className="status-grid">
+        {statuses.map((status) => (
+          <div className="status-count" key={status}>
+            <span className={`status ${status}`}>{statusLabels[status]}</span>
+            <strong>{num(requisitions.filter((r) => r.status === status).length)}</strong>
+          </div>
+        ))}
+      </div>
+      <div className="workflow-mini">
+        <strong>Workflow</strong>
+        <span>{"Request > Store verify > Final approve > Order > Receive > Issue to infrastructure/duty person"}</span>
+      </div>
+      <div className="request-list">
+        {active.map((row) => <RequisitionProgressCard key={row.id} row={row} receipts={receipts} />)}
+        {!active.length ? <div className="empty compact-empty">No active requisitions.</div> : null}
+      </div>
+    </aside>
+  );
+}
+
+function RequisitionProgressCard({ row, receipts }) {
+  const orderedQty = (row.lines || []).reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+  const receivedQty = (row.lines || []).reduce((sum, line) => sum + requisitionReceivedQty(receipts, row.id, line.itemId), 0);
+  return (
+    <div className="request-card progress-card">
+      <div>
+        <strong>{fmt(row.requisitionNo)}</strong>
+        <span>{lineSummary(row.lines)}</span>
+      </div>
+      <div className="progress-side">
+        <span className={`status ${row.status}`}>{statusLabels[row.status] || row.status}</span>
+        <small>{num(receivedQty)} / {num(orderedQty)} received</small>
+      </div>
+    </div>
+  );
+}
+
+function RequisitionTable({ rows, receipts = [], compact = false }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const filtered = rows.filter((r) => {
@@ -680,18 +822,23 @@ function RequisitionTable({ rows, compact = false }) {
       ) : null}
       <div className="table-wrap">
         <table>
-          <thead><tr><th>No</th><th>Date</th><th>Status</th><th>Items</th><th>Purpose</th><th>Supply Order</th></tr></thead>
+          <thead><tr><th>No</th><th>Date</th><th>Status</th><th>Items</th><th>Received</th><th>Purpose</th><th>Supply Order</th></tr></thead>
           <tbody>
-            {filtered.map((r) => (
-              <tr key={r.id}>
-                <td><strong>{fmt(r.requisitionNo)}</strong></td>
-                <td>{fmt(r.requestDate)}</td>
-                <td><span className={`status ${r.status}`}>{statusLabels[r.status] || r.status}</span></td>
-                <td>{compact ? num(r.lines?.length || 0) : r.lines?.map((l) => <div key={l.id || `${l.itemName}-${l.quantity}`}>{l.itemName} ({num(l.quantity)} {l.unit})</div>)}</td>
-                <td>{fmt(r.purpose)}</td>
-                <td>{fmt(r.supplyOrderNo)}</td>
-              </tr>
-            ))}
+            {filtered.map((r) => {
+              const orderedQty = (r.lines || []).reduce((sum, line) => sum + Number(line.quantity || 0), 0);
+              const receivedQty = (r.lines || []).reduce((sum, line) => sum + requisitionReceivedQty(receipts, r.id, line.itemId), 0);
+              return (
+                <tr key={r.id}>
+                  <td><strong>{fmt(r.requisitionNo)}</strong></td>
+                  <td>{fmt(r.requestDate)}</td>
+                  <td><span className={`status ${r.status}`}>{statusLabels[r.status] || r.status}</span></td>
+                  <td>{compact ? num(r.lines?.length || 0) : r.lines?.map((l) => <div key={l.id || `${l.itemName}-${l.quantity}`}>{l.itemName} ({num(l.quantity)} {l.unit})</div>)}</td>
+                  <td>{num(receivedQty)} / {num(orderedQty)}</td>
+                  <td>{fmt(r.purpose)}</td>
+                  <td>{fmt(r.supplyOrderNo)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -754,10 +901,10 @@ function ApprovalRow({ row, user, updateStatus }) {
       <OrderedItemsTable lines={row.lines || []} />
       <div>
         <div className="actions">
-          {user.role === "store" && row.status === "SUBMITTED" ? <button className="primary" onClick={() => updateStatus(row.id, "verify")}>Verify</button> : null}
-          {user.role === "approver" && row.status === "STORE_VERIFIED" ? <button className="primary" onClick={() => updateStatus(row.id, "final_approve")}>Final approve</button> : null}
-          {user.role === "store" && row.status === "APPROVED" ? <button onClick={() => updateStatus(row.id, "order")}>Mark order placed</button> : null}
-          {row.status !== "APPROVED" && (user.role === "store" || user.role === "approver") ? <button className="danger" onClick={() => updateStatus(row.id, "reject")}>Reject</button> : null}
+          {can(user, "requisition:first_approve") && row.status === "SUBMITTED" ? <button className="primary" onClick={() => updateStatus(row.id, "verify")}>Verify</button> : null}
+          {can(user, "requisition:final_approve") && row.status === "STORE_VERIFIED" ? <button className="primary" onClick={() => updateStatus(row.id, "final_approve")}>Final approve</button> : null}
+          {can(user, "requisition:order") && row.status === "APPROVED" ? <button onClick={() => updateStatus(row.id, "order")}>Mark order placed</button> : null}
+          {row.status !== "APPROVED" && (can(user, "requisition:first_approve") || can(user, "requisition:final_approve")) ? <button className="danger" onClick={() => updateStatus(row.id, "reject")}>Reject</button> : null}
         </div>
       </div>
     </div>
@@ -863,28 +1010,56 @@ function ReceiveStock({ data, api, refresh, setView }) {
 }
 
 function Inventory({ data }) {
-  const [filters, setFilters] = useState({ budgetHeadId: "", infrastructureId: "", itemId: "" });
-  const filteredLedger = data.ledger.filter((row) => {
-    if (filters.budgetHeadId && row.budgetHeadId !== filters.budgetHeadId) return false;
-    if (filters.infrastructureId && row.infrastructureId !== filters.infrastructureId) return false;
-    if (filters.itemId && row.itemId !== filters.itemId) return false;
-    return true;
-  });
-  const rows = filters.budgetHeadId || filters.infrastructureId || filters.itemId ? summarizeLedger(filteredLedger) : data.inventory;
+  const infrastructureMap = byId(data.infrastructures);
+  const groups = [];
+  for (const infrastructure of data.infrastructures) {
+    const ledger = data.ledger.filter((row) => row.infrastructureId === infrastructure.id);
+    const stock = summarizeLedger(ledger);
+    groups.push({ id: infrastructure.id, name: infrastructure.name, status: infrastructure.status || "Active", ledger, stock });
+  }
+  const unassignedLedger = data.ledger.filter((row) => !row.infrastructureId || !infrastructureMap[row.infrastructureId]);
+  const unassignedStock = summarizeLedger(unassignedLedger);
+  const activeGroups = groups.filter((group) => group.stock.length || group.ledger.length);
   return (
     <>
-      <Header title="Inventory" eyebrow="Stock balance" subtitle="Current stock is calculated from every receipt and issue movement." />
+      <Header title="Inventory" eyebrow="Infrastructure stock balance" subtitle="Stock is grouped automatically by key infrastructure and calculated from receipt and issue movements." />
       <div className="panel">
-        <PanelTitle title="Filter by" subtitle="Budget head, key infrastructure, and item." />
-        <div className="grid three">
-          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={filters.budgetHeadId} onChange={(budgetHeadId) => setFilters({ ...filters, budgetHeadId, infrastructureId: "" })} /></label>
-          <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={filters.infrastructureId} budgetHeadId={filters.budgetHeadId} onChange={(infrastructureId) => setFilters({ ...filters, infrastructureId })} /></label>
-          <label>Item <select value={filters.itemId} onChange={(e) => setFilters({ ...filters, itemId: e.target.value })}><option value="">All items</option>{data.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <PanelTitle title="All Stock Summary" subtitle="Complete stock balance across store and infrastructure movements." />
+        <InventoryTable rows={data.inventory} />
+      </div>
+      <div className="inventory-groups">
+        {activeGroups.map((group) => <InfrastructureInventorySection key={group.id} group={group} />)}
+        {unassignedStock.length || unassignedLedger.length ? (
+          <InfrastructureInventorySection group={{ id: "store", name: "Store / Not Assigned to Infrastructure", status: "Store", ledger: unassignedLedger, stock: unassignedStock }} />
+        ) : null}
+        {!activeGroups.length && !unassignedStock.length ? (
+          <div className="panel"><div className="empty">No infrastructure stock movements found.</div></div>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+function InfrastructureInventorySection({ group }) {
+  const received = group.stock.reduce((sum, row) => sum + Number(row.received || 0), 0);
+  const issued = group.stock.reduce((sum, row) => sum + Number(row.issued || 0), 0);
+  const balance = group.stock.reduce((sum, row) => sum + Number(row.balance || 0), 0);
+  return (
+    <section className="panel infrastructure-stock-section">
+      <PanelTitle title={group.name} subtitle={`${group.status} | Received ${num(received)} | Issued ${num(issued)} | Balance ${num(balance)}`} />
+      <div className="grid two infrastructure-stock-grid">
+        <div>
+          <h3 className="section-subtitle">Current Stock</h3>
+          <InventoryTable rows={group.stock} compact />
+        </div>
+        <div>
+          <h3 className="section-subtitle">Recent Movements</h3>
+          <div className="table-wrap">
+            <LedgerTable rows={group.ledger.slice().reverse().slice(0, 12)} compact />
+          </div>
         </div>
       </div>
-      <div className="panel"><PanelTitle title="Current Stock" subtitle="Search by item, category, or unit." /><InventoryTable rows={rows} /></div>
-      <div className="panel"><PanelTitle title="Recent Ledger" subtitle="Latest receipt and issue movements." /><LedgerTable rows={data.ledger.slice(0, 100)} /></div>
-    </>
+    </section>
   );
 }
 
@@ -906,12 +1081,12 @@ function InventoryTable({ rows, compact = false }) {
   );
 }
 
-function LedgerTable({ rows }) {
+function LedgerTable({ rows, compact = false }) {
   if (!rows.length) return <div className="empty">No ledger movements found.</div>;
   return (
     <table>
-      <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Unit</th><th>Document</th><th>Remarks</th></tr></thead>
-      <tbody>{rows.map((r) => <tr key={r.id}><td>{fmt(r.date)}</td><td>{fmt(r.type)}</td><td>{fmt(r.itemName)}</td><td>{num(r.quantity)}</td><td>{fmt(r.unit)}</td><td>{fmt(r.documentNo)}</td><td>{fmt(r.remarks)}</td></tr>)}</tbody>
+      <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Unit</th>{compact ? null : <th>Document</th>}{compact ? null : <th>Remarks</th>}</tr></thead>
+      <tbody>{rows.map((r) => <tr key={r.id}><td>{fmt(r.date)}</td><td>{fmt(r.type)}</td><td>{fmt(r.itemName)}</td><td>{num(r.quantity)}</td><td>{fmt(r.unit)}</td>{compact ? null : <td>{fmt(r.documentNo)}</td>}{compact ? null : <td>{fmt(r.remarks)}</td>}</tr>)}</tbody>
     </table>
   );
 }
@@ -937,12 +1112,12 @@ function IssueStock({ data, api, refresh, setView }) {
     <>
       <Header title="Issue Stock" eyebrow="Material release" subtitle="Issued quantities reduce stock and appear immediately in the ledger." />
       <form className="panel grid" onSubmit={submit}>
-        <PanelTitle title="Issue Details" subtitle="Issue stock only when the item has available balance." />
+        <PanelTitle title="Issue Details" subtitle="Issue available stock to a key infrastructure and duty personnel." />
         {error ? <div className="error">{error}</div> : null}
         <div className="grid four">
           <label>Issue Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
           <label>Issue Challan No <input value={form.issueChallanNo} onChange={(e) => setForm({ ...form, issueChallanNo: e.target.value })} /></label>
-          <label>Issued To <input value={form.issuedTo} onChange={(e) => setForm({ ...form, issuedTo: e.target.value })} required /></label>
+          <label>Duty Personnel / Issued To <input value={form.issuedTo} onChange={(e) => setForm({ ...form, issuedTo: e.target.value })} required /></label>
         </div>
         <div className="grid two">
           <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>

@@ -22,6 +22,12 @@ npm start
 
 Open `http://localhost:3000`.
 
+If your `.env` has Supabase credentials but the Supabase tables are not created yet, run the local JSON version:
+
+```powershell
+npm run start:local
+```
+
 ## Supabase Setup
 
 1. Create a Supabase project.

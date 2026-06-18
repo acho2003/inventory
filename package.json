@@ -11,7 +11,9 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0",
     "start": "node server.mjs",
-    "import:resources": "python scripts/import_resources.py",
+    "start:local": "node scripts/start_local.mjs",
+    "stop:server": "node scripts/stop_server.mjs",
+    "import:resources": "node scripts/run_import_resources.mjs",
     "supabase:sync": "node scripts/sync_supabase.mjs"
   },
   "dependencies": {

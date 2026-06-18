@@ -31,6 +31,17 @@ if (REQUIRE_SUPABASE && !USE_SUPABASE) {
   throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required when REQUIRE_SUPABASE=true.");
 }
 
+function isMissingSupabaseSchema(error) {
+  return error?.message?.includes("Could not find the table 'public.app_state'");
+}
+
+function supabaseSetupMessage(error) {
+  if (isMissingSupabaseSchema(error)) {
+    return "Supabase is connected, but the database tables are missing. Run supabase/schema.sql in the Supabase SQL Editor, then run npm run supabase:sync.";
+  }
+  return error?.message || "Supabase check failed.";
+}
+
 const rolePermissions = {
   requester: ["requisition:create", "requisition:read"],
   store: [
@@ -50,8 +61,29 @@ const rolePermissions = {
     "project:create",
     "budget:create",
     "infrastructure:create"
+  ],
+  admin: [
+    "requisition:create",
+    "requisition:read",
+    "requisition:first_approve",
+    "requisition:final_approve",
+    "requisition:order",
+    "receipt:create",
+    "issue:create",
+    "inventory:read",
+    "report:read",
+    "project:create",
+    "budget:create",
+    "infrastructure:create"
   ]
 };
+
+const defaultUsers = () => [
+  { id: "u-admin", username: "admin", password: "admin123", name: "Administrator", role: "admin" },
+  { id: "u-requester", username: "requester", password: "request123", name: "Requisition User", role: "requester" },
+  { id: "u-store", username: "store", password: "store123", name: "Store / PMU Officer", role: "store" },
+  { id: "u-approver", username: "approver", password: "approve123", name: "Final Approver", role: "approver" }
+];
 
 const defaultStore = () => ({
   meta: {
@@ -59,11 +91,7 @@ const defaultStore = () => ({
     createdAt: new Date().toISOString(),
     source: "Manual Yarju OAP records"
   },
-  users: [
-    { id: "u-requester", username: "requester", password: "request123", name: "Requisition User", role: "requester" },
-    { id: "u-store", username: "store", password: "store123", name: "Store / PMU Officer", role: "store" },
-    { id: "u-approver", username: "approver", password: "approve123", name: "Final Approver", role: "approver" }
-  ],
+  users: defaultUsers(),
   projects: [
     { id: "p-road", name: "PMU Road Construction", budget: 9000000 },
     { id: "p-main-15", name: "PMU Construction 15m", budget: 15000000 },
@@ -92,6 +120,12 @@ const defaultStore = () => ({
 });
 
 function normalizeStore(store) {
+  store.users ||= [];
+  for (const user of defaultUsers()) {
+    if (!store.users.some((entry) => entry.username?.toLowerCase() === user.username)) {
+      store.users.push(user);
+    }
+  }
   store.projects ||= [];
   store.budgetHeads ||= [];
   store.infrastructures ||= [];
@@ -149,12 +183,22 @@ async function readSupabaseStore() {
   const store = defaultStore();
   const state = await supabase.from("app_state").select("id,data").eq("id", "main").maybeSingle();
   if (state.error) throw state.error;
-  const records = await supabase.from("app_records").select("collection,id,data");
-  if (records.error) throw records.error;
 
   for (const collection of collections) store[collection] = [];
-  for (const row of records.data || []) {
-    if (collections.includes(row.collection)) store[row.collection].push(row.data);
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const records = await supabase
+      .from("app_records")
+      .select("collection,id,data")
+      .order("collection", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, to);
+    if (records.error) throw records.error;
+    for (const row of records.data || []) {
+      if (collections.includes(row.collection)) store[row.collection].push(row.data);
+    }
+    if (!records.data || records.data.length < pageSize) break;
   }
 
   if (state.data?.data) {
@@ -170,6 +214,27 @@ async function readSupabaseStore() {
 
   store.users = sortByUpdatedData(store.users.map((data) => ({ data })));
   return normalizeStore(store);
+}
+
+async function readLoginUsers() {
+  if (!USE_SUPABASE) {
+    await ensureStore();
+    const store = normalizeStore(JSON.parse(await fs.readFile(STORE_FILE, "utf8")));
+    return store.users;
+  }
+
+  const result = await supabase
+    .from("app_records")
+    .select("data")
+    .eq("collection", "users");
+  if (result.error) throw result.error;
+  const users = (result.data || []).map((row) => row.data);
+  for (const user of defaultUsers()) {
+    if (!users.some((entry) => entry.username?.toLowerCase() === user.username)) {
+      users.push(user);
+    }
+  }
+  return users;
 }
 
 async function writeSupabaseStore(store) {
@@ -323,6 +388,14 @@ function availableQty(store, itemId) {
   return inventorySummary(store).find((entry) => entry.itemId === itemId)?.balance || 0;
 }
 
+function receivedQtyForRequisition(store, requisitionId, itemId) {
+  return store.receipts
+    .filter((receipt) => receipt.requisitionId === requisitionId)
+    .reduce((sum, receipt) => sum + (receipt.lines || [])
+      .filter((line) => line.itemId === itemId)
+      .reduce((lineSum, line) => lineSum + Number(line.quantity || 0), 0), 0);
+}
+
 function dashboard(store) {
   const inventory = inventorySummary(store);
   return {
@@ -367,17 +440,19 @@ function addLedgerMovement(store, movement) {
 }
 
 async function routeApi(req, res, pathname) {
-  const store = await readStore();
-
   if (req.method === "POST" && pathname === "/api/login") {
     const body = await readBody(req);
-    const user = store.users.find((entry) => entry.username === body.username && entry.password === body.password);
+    const username = normalizeText(body.username).toLowerCase();
+    const password = normalizeText(body.password);
+    const users = await readLoginUsers();
+    const user = users.find((entry) => String(entry.username || "").toLowerCase() === username && String(entry.password || "") === password);
     if (!user) return sendError(res, 401, "Invalid username or password.");
     const token = crypto.randomBytes(24).toString("hex");
     sessions.set(token, { userId: user.id, createdAt: Date.now() });
     return sendJson(res, 200, { token, user: cleanUser(user) });
   }
 
+  const store = await readStore();
   const user = await requireUser(req, res, store);
   if (!user) return;
 
@@ -611,7 +686,11 @@ async function routeApi(req, res, pathname) {
     }
     store.receipts.push(receipt);
     if (requisition) {
-      requisition.status = "PARTIALLY_RECEIVED";
+      const allReceived = (requisition.lines || []).every((line) => {
+        const ordered = Number(line.quantity || 0);
+        return ordered > 0 && receivedQtyForRequisition(store, requisition.id, line.itemId) >= ordered;
+      });
+      requisition.status = allReceived ? "RECEIVED" : "PARTIALLY_RECEIVED";
       requisition.receipts = [...(requisition.receipts || []), receipt.id];
     }
     await writeStore(store);
@@ -690,7 +769,7 @@ async function routeHealth(req, res) {
       return sendJson(res, 503, {
         ok: false,
         storage: "supabase",
-        message: result.error.message
+        message: supabaseSetupMessage(result.error)
       });
     }
   }
@@ -733,7 +812,7 @@ async function serveStatic(req, res, pathname) {
 
 await ensureStore();
 
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     if (url.pathname === "/healthz") return await routeHealth(req, res);
@@ -742,7 +821,18 @@ http.createServer(async (req, res) => {
   } catch (error) {
     sendError(res, 500, error.message || "Server error");
   }
-}).listen(PORT, HOST, () => {
+});
+
+server.on("error", (error) => {
+  if (error.code === "EADDRINUSE") {
+    console.error(`Port ${PORT} is already in use.`);
+    console.error("Run `npm run stop:server` first, or set a different PORT value.");
+    process.exit(1);
+  }
+  throw error;
+});
+
+server.listen(PORT, HOST, () => {
   console.log(`Inventory System running at http://${PUBLIC_HOST}:${PORT}`);
   console.log(`Local access: http://localhost:${PORT}`);
 });

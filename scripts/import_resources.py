@@ -13,6 +13,15 @@ RESOURCES = ROOT / "resources"
 STORE = ROOT / "data" / "store.json"
 
 
+def default_users() -> list[dict[str, str]]:
+    return [
+        {"id": "u-admin", "username": "admin", "password": "admin123", "name": "Administrator", "role": "admin"},
+        {"id": "u-requester", "username": "requester", "password": "request123", "name": "Requisition User", "role": "requester"},
+        {"id": "u-store", "username": "store", "password": "store123", "name": "Store / PMU Officer", "role": "store"},
+        {"id": "u-approver", "username": "approver", "password": "approve123", "name": "Final Approver", "role": "approver"},
+    ]
+
+
 def clean(value: Any) -> str:
     if value is None:
         return ""
@@ -45,12 +54,8 @@ def load_store() -> dict[str, Any]:
     if STORE.exists():
         return json.loads(STORE.read_text(encoding="utf-8"))
     return {
-        "meta": {"name": "Yarju Inventory System", "createdAt": datetime.utcnow().isoformat()},
-        "users": [
-            {"id": "u-requester", "username": "requester", "password": "request123", "name": "Requisition User", "role": "requester"},
-            {"id": "u-store", "username": "store", "password": "store123", "name": "Store / PMU Officer", "role": "store"},
-            {"id": "u-approver", "username": "approver", "password": "approve123", "name": "Final Approver", "role": "approver"},
-        ],
+        "meta": {"name": "Inventory System", "createdAt": datetime.utcnow().isoformat()},
+        "users": default_users(),
         "projects": [],
         "budgetHeads": [],
         "infrastructures": [],
@@ -60,7 +65,7 @@ def load_store() -> dict[str, Any]:
         "issues": [],
         "ledger": [],
         "expenses": [],
-        "counters": {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1},
+        "counters": {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1, "expense": 1},
     }
 
 
@@ -69,6 +74,15 @@ def counter(store: dict[str, Any], key: str, prefix: str) -> str:
     value = f"{prefix}-{store['counters'][key]:05d}"
     store["counters"][key] += 1
     return value
+
+
+def ensure_default_users(store: dict[str, Any]):
+    store.setdefault("users", [])
+    existing = {clean(user.get("username", "")).lower() for user in store["users"]}
+    for user in default_users():
+        if user["username"] not in existing:
+            store["users"].append(user)
+            existing.add(user["username"])
 
 
 def get_project(store: dict[str, Any], name: str, budget: float = 0) -> str:
@@ -131,7 +145,7 @@ def reset_imported(store: dict[str, Any]):
     store["issues"] = []
     store["ledger"] = []
     store["expenses"] = []
-    store["counters"] = {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1}
+    store["counters"] = {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1, "expense": 1}
 
 
 def import_oap(store: dict[str, Any]):
@@ -160,6 +174,7 @@ def import_oap(store: dict[str, Any]):
                 continue
             store["expenses"].append(
                 {
+                    "id": counter(store, "expense", "EXP"),
                     "source": sheet_name,
                     "projectId": project_id,
                     "billNo": clean(row[1] if len(row) > 1 else ""),
@@ -308,6 +323,7 @@ def seed_budget_heads(store: dict[str, Any]):
 
 def main():
     store = load_store()
+    ensure_default_users(store)
     reset_imported(store)
     import_oap(store)
     import_issues(store)

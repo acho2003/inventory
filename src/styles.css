@@ -155,7 +155,7 @@ h2 { margin-bottom: 8px; font-size: 17px; }
 
 .demo-users {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 9px;
 }
 
@@ -347,7 +347,7 @@ h2 { margin-bottom: 8px; font-size: 17px; }
 
 .workflow-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
 }
 
@@ -508,6 +508,7 @@ tbody tr:hover td { background: #f9fbfd; }
 
 .status.APPROVED,
 .status.ORDERED,
+.status.RECEIVED,
 .status.CLOSED {
   background: var(--ok-soft);
   color: var(--ok);
@@ -559,6 +560,154 @@ tbody tr:hover td { background: #f9fbfd; }
 
 .line-row.receipt-line {
   grid-template-columns: 1.2fr 1fr 0.48fr 0.48fr 0.55fr 0.65fr 0.5fr 1fr 42px;
+}
+
+.usage-chart {
+  display: grid;
+  gap: 14px;
+}
+
+.usage-bar-row {
+  display: grid;
+  gap: 7px;
+}
+
+.usage-bar-head,
+.usage-legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.usage-bar-head strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.usage-bar-head span,
+.usage-legend {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.stacked-bar {
+  height: 18px;
+  display: flex;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #eef2f6;
+}
+
+.stacked-bar span {
+  min-width: 3px;
+}
+
+.bar-used { background: var(--navy); }
+.bar-balance { background: var(--accent); }
+
+.usage-legend {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.usage-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.usage-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.legend-used { background: var(--navy); }
+.legend-balance { background: var(--accent); }
+
+.requisition-workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.approval-status-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.status-count {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--surface-soft);
+}
+
+.status-count strong {
+  font-size: 22px;
+}
+
+.workflow-mini {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #c3e4df;
+  background: var(--accent-soft);
+  color: #20524e;
+  border-radius: 10px;
+  padding: 11px;
+}
+
+.workflow-mini span {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.progress-card {
+  align-items: flex-start;
+}
+
+.progress-side {
+  display: grid;
+  justify-items: end;
+  gap: 5px;
+}
+
+.progress-side small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.inventory-groups {
+  display: grid;
+  gap: 14px;
+}
+
+.infrastructure-stock-section {
+  display: grid;
+  gap: 12px;
+}
+
+.infrastructure-stock-grid {
+  align-items: start;
+}
+
+.section-subtitle {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--navy);
 }
 
 .check-label {
@@ -650,6 +799,7 @@ tbody tr:hover td { background: #f9fbfd; }
   .content { padding: 16px; }
   .kpis,
   .workflow-strip,
+  .requisition-workspace,
   .grid.two,
   .grid.three,
   .grid.four { grid-template-columns: 1fr 1fr; }
@@ -663,6 +813,8 @@ tbody tr:hover td { background: #f9fbfd; }
   .demo-users,
   .kpis,
   .workflow-strip,
+  .requisition-workspace,
+  .status-grid,
   .grid.two,
   .grid.three,
   .grid.four,
