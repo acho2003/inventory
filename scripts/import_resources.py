@@ -66,7 +66,8 @@ def load_store() -> dict[str, Any]:
         "ledger": [],
         "expenses": [],
         "stockEvents": [],
-        "counters": {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1, "expense": 1, "stockEvent": 1, "transfer": 1, "adjustment": 1},
+        "auditEvents": [],
+        "counters": {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1, "expense": 1, "stockEvent": 1, "transfer": 1, "adjustment": 1, "auditEvent": 1},
     }
 
 
@@ -147,6 +148,7 @@ def reset_imported(store: dict[str, Any]):
     store["ledger"] = []
     store["expenses"] = []
     store["stockEvents"] = store.get("stockEvents", [])
+    store["auditEvents"] = store.get("auditEvents", [])
     store["counters"] = {
         "requisition": 1,
         "receipt": 1,
@@ -156,6 +158,7 @@ def reset_imported(store: dict[str, Any]):
         "stockEvent": len(store["stockEvents"]) + 1,
         "transfer": 1,
         "adjustment": 1,
+        "auditEvent": len(store["auditEvents"]) + 1,
     }
 
 

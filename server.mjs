@@ -23,7 +23,7 @@ const supabase = USE_SUPABASE
       auth: { persistSession: false, autoRefreshToken: false }
     })
   : null;
-const collections = ["users", "projects", "budgetHeads", "infrastructures", "items", "requisitions", "receipts", "issues", "ledger", "expenses", "stockEvents"];
+const collections = ["users", "projects", "budgetHeads", "infrastructures", "items", "requisitions", "receipts", "issues", "ledger", "expenses", "stockEvents", "auditEvents"];
 
 const sessions = new Map();
 
@@ -43,37 +43,72 @@ function supabaseSetupMessage(error) {
 }
 
 const rolePermissions = {
-  requester: ["requisition:create", "requisition:read"],
+  requester: [
+    "requisition:create",
+    "requisition:read",
+    "budget:read",
+    "infrastructure:read",
+    "item:read"
+  ],
   store: [
+    "dashboard:read",
     "requisition:read",
     "requisition:first_approve",
     "requisition:order",
+    "budget:read",
+    "infrastructure:read",
+    "item:read",
+    "receipt:read",
     "receipt:create",
+    "issue:read",
     "issue:create",
+    "stock:event:read",
     "stock:event",
     "inventory:read",
-    "report:read"
+    "ledger:read",
+    "report:read",
+    "audit:read"
   ],
   approver: [
+    "dashboard:read",
+    "project:read",
+    "budget:read",
+    "infrastructure:read",
+    "item:read",
     "requisition:read",
     "requisition:final_approve",
+    "receipt:read",
+    "issue:read",
+    "stock:event:read",
     "inventory:read",
+    "ledger:read",
     "report:read",
+    "audit:read",
     "project:create",
     "budget:create",
     "infrastructure:create"
   ],
   admin: [
+    "dashboard:read",
+    "project:read",
+    "budget:read",
+    "infrastructure:read",
+    "item:read",
     "requisition:create",
     "requisition:read",
     "requisition:first_approve",
     "requisition:final_approve",
     "requisition:order",
+    "receipt:read",
     "receipt:create",
+    "issue:read",
     "issue:create",
+    "stock:event:read",
     "stock:event",
     "inventory:read",
+    "ledger:read",
     "report:read",
+    "audit:read",
     "project:create",
     "budget:create",
     "infrastructure:create",
@@ -120,7 +155,8 @@ const defaultStore = () => ({
   ledger: [],
   expenses: [],
   stockEvents: [],
-  counters: { requisition: 1, receipt: 1, issue: 1, movement: 1, project: 1, budgetHead: 1, infrastructure: 1, stockEvent: 1, transfer: 1, adjustment: 1 }
+  auditEvents: [],
+  counters: { requisition: 1, receipt: 1, issue: 1, movement: 1, project: 1, budgetHead: 1, infrastructure: 1, stockEvent: 1, transfer: 1, adjustment: 1, auditEvent: 1 }
 });
 
 function normalizeStore(store) {
@@ -140,8 +176,9 @@ function normalizeStore(store) {
   store.ledger ||= [];
   store.expenses ||= [];
   store.stockEvents ||= [];
+  store.auditEvents ||= [];
   store.counters ||= {};
-  for (const key of ["requisition", "receipt", "issue", "movement", "project", "budgetHead", "infrastructure", "stockEvent", "transfer", "adjustment"]) {
+  for (const key of ["requisition", "receipt", "issue", "movement", "project", "budgetHead", "infrastructure", "stockEvent", "transfer", "adjustment", "auditEvent"]) {
     store.counters[key] ||= 1;
   }
   for (const project of store.projects) {
@@ -302,6 +339,19 @@ function sendError(res, status, message) {
   sendJson(res, status, { error: message });
 }
 
+function sendCsv(res, filename, rows) {
+  res.writeHead(200, {
+    "Content-Type": "text/csv; charset=utf-8",
+    "Content-Disposition": `attachment; filename="${filename}"`
+  });
+  res.end(rows);
+}
+
+function csvCell(value) {
+  const text = value === null || value === undefined ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
 async function readBody(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -355,7 +405,8 @@ function activeStore(store) {
     receipts: activeRows(store.receipts),
     issues: activeRows(store.issues),
     stockEvents: activeRows(store.stockEvents),
-    ledger: activeRows(store.ledger)
+    ledger: activeRows(store.ledger),
+    auditEvents: store.auditEvents || []
   };
 }
 
@@ -367,8 +418,120 @@ function softDelete(record, user) {
   record.status = "Deleted";
 }
 
+function cloneForAudit(value) {
+  if (value === undefined) return null;
+  return JSON.parse(JSON.stringify(value));
+}
+
+function changedFields(before = {}, after = {}) {
+  const changes = {};
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  for (const key of keys) {
+    if (["updatedAt"].includes(key)) continue;
+    const previous = before?.[key];
+    const next = after?.[key];
+    if (JSON.stringify(previous) !== JSON.stringify(next)) changes[key] = { before: previous ?? null, after: next ?? null };
+  }
+  return changes;
+}
+
+function requestAuditMeta(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return {
+    ip: forwarded || req.socket?.remoteAddress || "",
+    userAgent: String(req.headers["user-agent"] || "")
+  };
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function auditHash(event) {
+  const { hash, ...payload } = event;
+  return crypto.createHash("sha256").update(stableStringify(payload)).digest("hex");
+}
+
+function verifyAuditChain(events = []) {
+  const ordered = [...events].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  let previousHash = "";
+  for (const event of ordered) {
+    if ((event.previousHash || "") !== previousHash) return false;
+    if (auditHash(event) !== event.hash) return false;
+    previousHash = event.hash || "";
+  }
+  return true;
+}
+
+function appendAuditEvent(store, req, user, payload) {
+  store.auditEvents ||= [];
+  const previous = store.auditEvents[store.auditEvents.length - 1];
+  const before = cloneForAudit(payload.before);
+  const after = cloneForAudit(payload.after);
+  const event = {
+    id: nextId(store, "auditEvent", "AUD"),
+    at: new Date().toISOString(),
+    actorId: user?.id || "",
+    actorName: user?.name || payload.actorName || "Unknown",
+    actorRole: user?.role || payload.actorRole || "anonymous",
+    eventType: payload.eventType,
+    entityType: payload.entityType || "",
+    entityId: payload.entityId || "",
+    entityLabel: payload.entityLabel || "",
+    before,
+    after,
+    changes: payload.changes || changedFields(before, after),
+    reason: payload.reason || "",
+    remarks: payload.remarks || "",
+    documentNo: payload.documentNo || "",
+    linkedLedgerIds: payload.linkedLedgerIds || [],
+    linkedRequisitionId: payload.linkedRequisitionId || "",
+    linkedReceiptId: payload.linkedReceiptId || "",
+    linkedIssueId: payload.linkedIssueId || "",
+    ip: requestAuditMeta(req).ip,
+    userAgent: requestAuditMeta(req).userAgent,
+    previousHash: previous?.hash || ""
+  };
+  event.hash = auditHash(event);
+  store.auditEvents.push(event);
+  return event;
+}
+
+function appendNewItemAudits(store, req, user, beforeItemIds) {
+  for (const item of store.items.filter((entry) => !beforeItemIds.has(entry.id))) {
+    appendAuditEvent(store, req, user, {
+      eventType: "CREATE",
+      entityType: "item",
+      entityId: item.id,
+      entityLabel: item.name,
+      after: item,
+      remarks: "Created from item line entry"
+    });
+  }
+}
+
 function adminOnly(user) {
   return hasPermission(user, "admin:crud");
+}
+
+function canRead(user, permission) {
+  return hasPermission(user, permission);
+}
+
+function requireReadPermission(user, res, permission, label) {
+  if (canRead(user, permission)) return true;
+  sendError(res, 403, `Your role cannot view ${label}.`);
+  return false;
+}
+
+function visibleRequisitionsForUser(store, user) {
+  const rows = activeRows(store.requisitions);
+  if (user.role === "requester") return rows.filter((row) => row.createdBy === user.id);
+  return rows;
 }
 
 function findItemById(store, itemId) {
@@ -378,12 +541,17 @@ function findItemById(store, itemId) {
 }
 
 function findOrCreateItem(store, line) {
+  if (line.itemId) {
+    const byId = store.items.find((entry) => entry.id === line.itemId && !entry.isDeleted && !entry.deletedAt);
+    if (byId) return byId;
+  }
   const name = normalizeText(line.itemName || line.name);
   if (!name) throw new Error("Item name is required.");
   const unit = normalizeText(line.unit);
   const category = normalizeText(line.category || "General");
   const key = name.toLowerCase();
   let item = store.items.find((entry) => !entry.isDeleted && !entry.deletedAt && entry.name.toLowerCase() === key && (!unit || entry.unit === unit));
+  if (!item) item = store.items.find((entry) => !entry.isDeleted && !entry.deletedAt && entry.name.toLowerCase() === key);
   if (!item) {
     item = {
       id: `i-${crypto.randomUUID().slice(0, 8)}`,
@@ -466,8 +634,59 @@ function dashboard(store) {
   };
 }
 
+function deletedAuditCounts(store) {
+  const collectionsToCount = ["budgetHeads", "infrastructures", "items", "requisitions", "receipts", "issues", "stockEvents"];
+  return collectionsToCount.reduce((result, collection) => {
+    result[collection] = (store[collection] || []).filter((row) => row.isDeleted || row.deletedAt).length;
+    return result;
+  }, {});
+}
+
+function auditSummary(store) {
+  const inventory = inventorySummary(activeStore(store));
+  const auditEvents = store.auditEvents || [];
+  const receipts = activeRows(store.receipts);
+  const requisitions = activeRows(store.requisitions);
+  const stockEvents = activeRows(store.stockEvents);
+  const deleted = deletedAuditCounts(store);
+  return {
+    totalAuditEvents: auditEvents.length,
+    hashChainValid: verifyAuditChain(auditEvents),
+    lastAuditAt: auditEvents[auditEvents.length - 1]?.at || "",
+    eventTypes: auditEvents.reduce((result, event) => {
+      result[event.eventType] = (result[event.eventType] || 0) + 1;
+      return result;
+    }, {}),
+    exceptions: {
+      missingChallan: receipts.filter((receipt) => !receipt.challanNo).length,
+      missingDv: receipts.filter((receipt) => !receipt.dvNo).length,
+      missingBill: receipts.filter((receipt) => !receipt.billNo).length,
+      negativeStock: inventory.filter((row) => Number(row.balance || 0) < 0).length,
+      zeroStock: inventory.filter((row) => Number(row.balance || 0) === 0).length,
+      rejectedRequests: requisitions.filter((row) => row.status === "REJECTED").length,
+      underRepair: stockEvents.filter((event) => event.type === "REPAIR_NOTE").length,
+      disposedOrSpoiled: stockEvents.filter((event) => ["DISPOSED", "SPOILED"].includes(event.type)).length,
+      deletedTotal: Object.values(deleted).reduce((sum, value) => sum + value, 0)
+    },
+    deleted
+  };
+}
+
+function lifecycleStatusForMovement(type, infrastructureId = "") {
+  if (type === "RECEIPT") return infrastructureId ? "Received To Infrastructure" : "In Store";
+  if (type === "ISSUE") return "Issued";
+  if (type === "TRANSFER_OUT") return "Transferred Out";
+  if (type === "TRANSFER_IN") return "Transferred";
+  if (type === "DISPOSED") return "Disposed";
+  if (type === "SPOILED") return "Spoiled";
+  if (type === "REPAIR_NOTE") return "Under Repair";
+  if (type === "RETURNED_FROM_REPAIR") return "Returned";
+  if (type === "ADJUSTMENT") return "Adjusted";
+  return type || "";
+}
+
 function addLedgerMovement(store, movement) {
-  store.ledger.push({
+  const row = {
     id: nextId(store, "movement", "MOV"),
     date: movement.date || new Date().toISOString().slice(0, 10),
     type: movement.type,
@@ -486,9 +705,12 @@ function addLedgerMovement(store, movement) {
     referenceId: movement.referenceId,
     documentNo: movement.documentNo || "",
     remarks: movement.remarks || "",
+    lifecycleStatus: movement.lifecycleStatus || lifecycleStatusForMovement(movement.type, movement.infrastructureId || ""),
     createdBy: movement.createdBy || "",
     createdByName: movement.createdByName || ""
-  });
+  };
+  store.ledger.push(row);
+  return row;
 }
 
 function applyBasicPatch(record, body, fields) {
@@ -522,9 +744,29 @@ async function routeApi(req, res, pathname) {
     const password = normalizeText(body.password);
     const users = await readLoginUsers();
     const user = users.find((entry) => String(entry.username || "").toLowerCase() === username && String(entry.password || "") === password);
-    if (!user) return sendError(res, 401, "Invalid username or password.");
+    const auditStore = await readStore();
+    if (!user) {
+      appendAuditEvent(auditStore, req, null, {
+        eventType: "LOGIN_FAILED",
+        entityType: "auth",
+        entityId: username || "unknown",
+        entityLabel: username || "Unknown login",
+        after: { username },
+        reason: "Invalid username or password"
+      });
+      await writeStore(auditStore);
+      return sendError(res, 401, "Invalid username or password.");
+    }
     const token = crypto.randomBytes(24).toString("hex");
     sessions.set(token, { userId: user.id, createdAt: Date.now() });
+    appendAuditEvent(auditStore, req, user, {
+      eventType: "LOGIN_SUCCESS",
+      entityType: "auth",
+      entityId: user.id,
+      entityLabel: user.username,
+      after: { username: user.username, role: user.role }
+    });
+    await writeStore(auditStore);
     return sendJson(res, 200, { token, user: cleanUser(user) });
   }
 
@@ -532,20 +774,55 @@ async function routeApi(req, res, pathname) {
   const user = await requireUser(req, res, store);
   if (!user) return;
   const visible = activeStore(store);
+  const userVisible = { ...visible, requisitions: visibleRequisitionsForUser(store, user) };
 
   if (req.method === "GET" && pathname === "/api/me") return sendJson(res, 200, cleanUser(user));
-  if (req.method === "GET" && pathname === "/api/dashboard") return sendJson(res, 200, dashboard(visible));
-  if (req.method === "GET" && pathname === "/api/projects") return sendJson(res, 200, visible.projects);
-  if (req.method === "GET" && pathname === "/api/budget-heads") return sendJson(res, 200, visible.budgetHeads);
-  if (req.method === "GET" && pathname === "/api/infrastructures") return sendJson(res, 200, visible.infrastructures);
-  if (req.method === "GET" && pathname === "/api/items") return sendJson(res, 200, visible.items.sort((a, b) => a.name.localeCompare(b.name)));
-  if (req.method === "GET" && pathname === "/api/requisitions") return sendJson(res, 200, visible.requisitions.slice().reverse());
-  if (req.method === "GET" && pathname === "/api/receipts") return sendJson(res, 200, visible.receipts.slice().reverse());
-  if (req.method === "GET" && pathname === "/api/issues") return sendJson(res, 200, visible.issues.slice().reverse());
-  if (req.method === "GET" && pathname === "/api/stock-events") return sendJson(res, 200, visible.stockEvents.slice().reverse());
-  if (req.method === "GET" && pathname === "/api/inventory") return sendJson(res, 200, inventorySummary(visible));
-  if (req.method === "GET" && pathname === "/api/ledger") return sendJson(res, 200, visible.ledger.slice().reverse());
+  if (req.method === "GET" && pathname === "/api/dashboard") {
+    if (!requireReadPermission(user, res, "dashboard:read", "dashboard")) return;
+    return sendJson(res, 200, dashboard(visible));
+  }
+  if (req.method === "GET" && pathname === "/api/projects") {
+    if (!requireReadPermission(user, res, "project:read", "projects")) return;
+    return sendJson(res, 200, visible.projects);
+  }
+  if (req.method === "GET" && pathname === "/api/budget-heads") {
+    if (!requireReadPermission(user, res, "budget:read", "budget heads")) return;
+    return sendJson(res, 200, visible.budgetHeads);
+  }
+  if (req.method === "GET" && pathname === "/api/infrastructures") {
+    if (!requireReadPermission(user, res, "infrastructure:read", "key infrastructures")) return;
+    return sendJson(res, 200, visible.infrastructures);
+  }
+  if (req.method === "GET" && pathname === "/api/items") {
+    if (!requireReadPermission(user, res, "item:read", "items")) return;
+    return sendJson(res, 200, visible.items.sort((a, b) => a.name.localeCompare(b.name)));
+  }
+  if (req.method === "GET" && pathname === "/api/requisitions") {
+    if (!requireReadPermission(user, res, "requisition:read", "requisitions")) return;
+    return sendJson(res, 200, userVisible.requisitions.slice().reverse());
+  }
+  if (req.method === "GET" && pathname === "/api/receipts") {
+    if (!requireReadPermission(user, res, "receipt:read", "receipts")) return;
+    return sendJson(res, 200, visible.receipts.slice().reverse());
+  }
+  if (req.method === "GET" && pathname === "/api/issues") {
+    if (!requireReadPermission(user, res, "issue:read", "issues")) return;
+    return sendJson(res, 200, visible.issues.slice().reverse());
+  }
+  if (req.method === "GET" && pathname === "/api/stock-events") {
+    if (!requireReadPermission(user, res, "stock:event:read", "stock events")) return;
+    return sendJson(res, 200, visible.stockEvents.slice().reverse());
+  }
+  if (req.method === "GET" && pathname === "/api/inventory") {
+    if (!requireReadPermission(user, res, "inventory:read", "inventory")) return;
+    return sendJson(res, 200, inventorySummary(visible));
+  }
+  if (req.method === "GET" && pathname === "/api/ledger") {
+    if (!requireReadPermission(user, res, "ledger:read", "ledger")) return;
+    return sendJson(res, 200, visible.ledger.slice().reverse());
+  }
   if (req.method === "GET" && pathname === "/api/reports") {
+    if (!requireReadPermission(user, res, "report:read", "reports")) return;
     return sendJson(res, 200, {
       dashboard: dashboard(visible),
       projects: visible.projects,
@@ -561,6 +838,23 @@ async function routeApi(req, res, pathname) {
         stockEvents: store.stockEvents.filter((row) => row.isDeleted || row.deletedAt)
       }
     });
+  }
+  if (req.method === "GET" && pathname === "/api/audit-summary") {
+    if (!requireReadPermission(user, res, "audit:read", "audit summary")) return;
+    return sendJson(res, 200, auditSummary(store));
+  }
+  if (req.method === "GET" && pathname === "/api/audit-events/export.csv") {
+    if (!requireReadPermission(user, res, "audit:read", "audit events")) return;
+    const headers = ["id", "at", "actorName", "actorRole", "eventType", "entityType", "entityLabel", "reason", "documentNo", "hash", "previousHash"];
+    const csv = [
+      headers.map(csvCell).join(","),
+      ...(store.auditEvents || []).slice().reverse().map((event) => headers.map((key) => csvCell(event[key])).join(","))
+    ].join("\n");
+    return sendCsv(res, "audit-events.csv", csv);
+  }
+  if (req.method === "GET" && pathname === "/api/audit-events") {
+    if (!requireReadPermission(user, res, "audit:read", "audit events")) return;
+    return sendJson(res, 200, (store.auditEvents || []).slice().reverse());
   }
 
   if (req.method === "POST" && pathname === "/api/projects") {
@@ -578,6 +872,13 @@ async function routeApi(req, res, pathname) {
       createdAt: new Date().toISOString()
     };
     store.projects.push(project);
+    appendAuditEvent(store, req, user, {
+      eventType: "CREATE",
+      entityType: "project",
+      entityId: project.id,
+      entityLabel: project.name,
+      after: project
+    });
     await writeStore(store);
     return sendJson(res, 201, project);
   }
@@ -598,6 +899,13 @@ async function routeApi(req, res, pathname) {
       createdAt: new Date().toISOString()
     };
     store.budgetHeads.push(budgetHead);
+    appendAuditEvent(store, req, user, {
+      eventType: "CREATE",
+      entityType: "budgetHead",
+      entityId: budgetHead.id,
+      entityLabel: budgetHead.name,
+      after: budgetHead
+    });
     await writeStore(store);
     return sendJson(res, 201, budgetHead);
   }
@@ -622,6 +930,13 @@ async function routeApi(req, res, pathname) {
       createdAt: new Date().toISOString()
     };
     store.infrastructures.push(infrastructure);
+    appendAuditEvent(store, req, user, {
+      eventType: "CREATE",
+      entityType: "infrastructure",
+      entityId: infrastructure.id,
+      entityLabel: infrastructure.name,
+      after: infrastructure
+    });
     await writeStore(store);
     return sendJson(res, 201, infrastructure);
   }
@@ -631,11 +946,20 @@ async function routeApi(req, res, pathname) {
     if (!adminOnly(user)) return sendError(res, 403, "Only admin can edit or delete budget heads.");
     try {
       const record = findRecord(store.budgetHeads, budgetHeadIdForEdit, "Budget head");
+      const before = cloneForAudit(record);
       if (req.method === "DELETE") {
         softDelete(record, user);
       } else {
         applyBasicPatch(record, await readBody(req), ["projectId", "name", "amount", "status"]);
       }
+      appendAuditEvent(store, req, user, {
+        eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
+        entityType: "budgetHead",
+        entityId: record.id,
+        entityLabel: record.name,
+        before,
+        after: record
+      });
       await writeStore(store);
       return sendJson(res, 200, record);
     } catch (error) {
@@ -648,11 +972,20 @@ async function routeApi(req, res, pathname) {
     if (!adminOnly(user)) return sendError(res, 403, "Only admin can edit or delete infrastructures.");
     try {
       const record = findRecord(store.infrastructures, infrastructureIdForEdit, "Infrastructure");
+      const before = cloneForAudit(record);
       if (req.method === "DELETE") {
         softDelete(record, user);
       } else {
         applyBasicPatch(record, await readBody(req), ["projectId", "budgetHeadId", "name", "amount", "status"]);
       }
+      appendAuditEvent(store, req, user, {
+        eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
+        entityType: "infrastructure",
+        entityId: record.id,
+        entityLabel: record.name,
+        before,
+        after: record
+      });
       await writeStore(store);
       return sendJson(res, 200, record);
     } catch (error) {
@@ -665,11 +998,20 @@ async function routeApi(req, res, pathname) {
     if (!adminOnly(user)) return sendError(res, 403, "Only admin can edit or delete items.");
     try {
       const record = findRecord(store.items, itemIdForEdit, "Item");
+      const before = cloneForAudit(record);
       if (req.method === "DELETE") {
         softDelete(record, user);
       } else {
         applyBasicPatch(record, await readBody(req), ["name", "category", "unit"]);
       }
+      appendAuditEvent(store, req, user, {
+        eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
+        entityType: "item",
+        entityId: record.id,
+        entityLabel: record.name,
+        before,
+        after: record
+      });
       await writeStore(store);
       return sendJson(res, 200, record);
     } catch (error) {
@@ -682,6 +1024,7 @@ async function routeApi(req, res, pathname) {
     const body = await readBody(req);
     const lines = (body.lines || []).filter((line) => normalizeText(line.itemName || line.name));
     if (!lines.length) return sendError(res, 400, "Add at least one item.");
+    const beforeItemIds = new Set(store.items.map((item) => item.id));
     const reqLines = lines.map((line) => {
       const item = findOrCreateItem(store, line);
       return {
@@ -714,6 +1057,15 @@ async function routeApi(req, res, pathname) {
       lines: reqLines
     };
     store.requisitions.push(requisition);
+    appendNewItemAudits(store, req, user, beforeItemIds);
+    appendAuditEvent(store, req, user, {
+      eventType: "CREATE",
+      entityType: "requisition",
+      entityId: requisition.id,
+      entityLabel: requisition.requisitionNo,
+      after: requisition,
+      linkedRequisitionId: requisition.id
+    });
     await writeStore(store);
     return sendJson(res, 201, requisition);
   }
@@ -723,6 +1075,7 @@ async function routeApi(req, res, pathname) {
     if (!adminOnly(user)) return sendError(res, 403, "Only admin can edit or delete requisitions.");
     try {
       const record = findRecord(store.requisitions, requisitionIdForEdit, "Requisition");
+      const before = cloneForAudit(record);
       if (req.method === "DELETE") {
         softDelete(record, user);
       } else {
@@ -730,6 +1083,15 @@ async function routeApi(req, res, pathname) {
         applyBasicPatch(record, body, ["requisitionNo", "requestDate", "receivedDate", "projectId", "budgetHeadId", "infrastructureId", "purpose", "status", "supplyOrderNo"]);
         if (Array.isArray(body.lines)) record.lines = body.lines;
       }
+      appendAuditEvent(store, req, user, {
+        eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
+        entityType: "requisition",
+        entityId: record.id,
+        entityLabel: record.requisitionNo,
+        before,
+        after: record,
+        linkedRequisitionId: record.id
+      });
       await writeStore(store);
       return sendJson(res, 200, record);
     } catch (error) {
@@ -744,6 +1106,7 @@ async function routeApi(req, res, pathname) {
     const body = await readBody(req);
     const action = body.action;
     const now = new Date().toISOString();
+    const before = cloneForAudit(requisition);
     if (action === "verify") {
       if (!hasPermission(user, "requisition:first_approve")) return sendError(res, 403, "Only store/PMU can verify.");
       if (requisition.status !== "SUBMITTED") return sendError(res, 400, "Only submitted requisitions can be verified.");
@@ -780,6 +1143,17 @@ async function routeApi(req, res, pathname) {
       role: user.role,
       note: normalizeText(body.note),
       at: now
+    });
+    appendAuditEvent(store, req, user, {
+      eventType: "STATUS_CHANGE",
+      entityType: "requisition",
+      entityId: requisition.id,
+      entityLabel: requisition.requisitionNo,
+      before,
+      after: requisition,
+      reason: normalizeText(body.note),
+      documentNo: requisition.supplyOrderNo || "",
+      linkedRequisitionId: requisition.id
     });
     await writeStore(store);
     return sendJson(res, 200, requisition);
@@ -820,10 +1194,11 @@ async function routeApi(req, res, pathname) {
         createdAt: new Date().toISOString()
       };
       store.stockEvents.push(event);
+      const linkedLedgerIds = [];
 
       if (type === "TRANSFER") {
         const transferNo = nextId(store, "transfer", "TR");
-        addLedgerMovement(store, {
+        linkedLedgerIds.push(addLedgerMovement(store, {
           type: "TRANSFER_OUT",
           date: event.date,
           item,
@@ -839,8 +1214,8 @@ async function routeApi(req, res, pathname) {
           remarks: event.remarks,
           createdBy: user.id,
           createdByName: user.name
-        });
-        addLedgerMovement(store, {
+        }).id);
+        linkedLedgerIds.push(addLedgerMovement(store, {
           type: "TRANSFER_IN",
           date: event.date,
           item,
@@ -856,9 +1231,9 @@ async function routeApi(req, res, pathname) {
           remarks: event.remarks,
           createdBy: user.id,
           createdByName: user.name
-        });
+        }).id);
       } else if (["DISPOSED", "SPOILED", "REPAIR_NOTE", "RETURNED_FROM_REPAIR"].includes(type)) {
-        addLedgerMovement(store, {
+        linkedLedgerIds.push(addLedgerMovement(store, {
           type,
           date: event.date,
           item,
@@ -874,8 +1249,18 @@ async function routeApi(req, res, pathname) {
           remarks: event.remarks,
           createdBy: user.id,
           createdByName: user.name
-        });
+        }).id);
       }
+      appendAuditEvent(store, req, user, {
+        eventType: "STOCK_MOVEMENT",
+        entityType: "stockEvent",
+        entityId: event.id,
+        entityLabel: `${type} ${item.name}`,
+        after: event,
+        remarks: event.remarks,
+        documentNo: event.documentNo,
+        linkedLedgerIds
+      });
       await writeStore(store);
       return sendJson(res, 201, event);
     } catch (error) {
@@ -888,12 +1273,24 @@ async function routeApi(req, res, pathname) {
     if (!adminOnly(user)) return sendError(res, 403, "Only admin can edit or delete stock events.");
     try {
       const record = findRecord(store.stockEvents, stockEventIdForEdit, "Stock event");
+      const before = cloneForAudit(record);
       if (req.method === "DELETE") {
         softDelete(record, user);
         for (const movement of store.ledger.filter((entry) => entry.referenceType === "stockEvent" && entry.referenceId === record.id)) softDelete(movement, user);
       } else {
         applyBasicPatch(record, await readBody(req), ["date", "dutyPerson", "documentNo", "remarks"]);
       }
+      appendAuditEvent(store, req, user, {
+        eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
+        entityType: "stockEvent",
+        entityId: record.id,
+        entityLabel: `${record.type} ${record.itemName}`,
+        before,
+        after: record,
+        remarks: record.remarks,
+        documentNo: record.documentNo,
+        linkedLedgerIds: store.ledger.filter((entry) => entry.referenceType === "stockEvent" && entry.referenceId === record.id).map((entry) => entry.id)
+      });
       await writeStore(store);
       return sendJson(res, 200, record);
     } catch (error) {
@@ -906,6 +1303,7 @@ async function routeApi(req, res, pathname) {
     const body = await readBody(req);
     const lines = (body.lines || []).filter((line) => normalizeText(line.itemName || line.name));
     if (!lines.length) return sendError(res, 400, "Add at least one received item.");
+    const beforeItemIds = new Set(store.items.map((item) => item.id));
     const requisition = body.requisitionId ? store.requisitions.find((entry) => entry.id === body.requisitionId) : null;
     if (body.requisitionId && !requisition) return sendError(res, 404, "Linked requisition not found.");
     if (requisition && !["APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(requisition.status)) {
@@ -931,6 +1329,7 @@ async function routeApi(req, res, pathname) {
       remarks: normalizeText(body.remarks),
       lines: []
     };
+    const linkedLedgerIds = [];
     for (const line of lines) {
       const item = findOrCreateItem(store, line);
       const quantity = qtyNumber(line.quantity);
@@ -946,7 +1345,7 @@ async function routeApi(req, res, pathname) {
         amount: Number(line.amount || (Number(line.rate || 0) * quantity)),
         remarks: normalizeText(line.remarks)
       });
-      addLedgerMovement(store, {
+      linkedLedgerIds.push(addLedgerMovement(store, {
         type: "RECEIPT",
         date: receipt.date,
         item,
@@ -959,9 +1358,10 @@ async function routeApi(req, res, pathname) {
         referenceId: receipt.id,
         documentNo: receipt.challanNo,
         remarks: receipt.remarks
-      });
+      }).id);
     }
     store.receipts.push(receipt);
+    appendNewItemAudits(store, req, user, beforeItemIds);
     if (requisition) {
       const allReceived = (requisition.lines || []).every((line) => {
         const ordered = Number(line.quantity || 0);
@@ -970,6 +1370,18 @@ async function routeApi(req, res, pathname) {
       requisition.status = allReceived ? "RECEIVED" : "PARTIALLY_RECEIVED";
       requisition.receipts = [...(requisition.receipts || []), receipt.id];
     }
+    appendAuditEvent(store, req, user, {
+      eventType: "STOCK_MOVEMENT",
+      entityType: "receipt",
+      entityId: receipt.id,
+      entityLabel: receipt.challanNo || receipt.id,
+      after: receipt,
+      remarks: receipt.remarks,
+      documentNo: receipt.challanNo,
+      linkedLedgerIds,
+      linkedRequisitionId: receipt.requisitionId,
+      linkedReceiptId: receipt.id
+    });
     await writeStore(store);
     return sendJson(res, 201, receipt);
   }
@@ -979,12 +1391,26 @@ async function routeApi(req, res, pathname) {
     if (!adminOnly(user)) return sendError(res, 403, "Only admin can edit or delete receipts.");
     try {
       const record = findRecord(store.receipts, receiptIdForEdit, "Receipt");
+      const before = cloneForAudit(record);
       if (req.method === "DELETE") {
         softDelete(record, user);
         for (const movement of store.ledger.filter((entry) => entry.referenceType === "receipt" && entry.referenceId === record.id)) softDelete(movement, user);
       } else {
         applyBasicPatch(record, await readBody(req), ["date", "supplier", "challanNo", "challanDate", "dvNo", "dvDate", "billNo", "billDate", "dispatchNo", "remarks", "budgetHeadId", "infrastructureId"]);
       }
+      appendAuditEvent(store, req, user, {
+        eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
+        entityType: "receipt",
+        entityId: record.id,
+        entityLabel: record.challanNo || record.id,
+        before,
+        after: record,
+        remarks: record.remarks,
+        documentNo: record.challanNo,
+        linkedLedgerIds: store.ledger.filter((entry) => entry.referenceType === "receipt" && entry.referenceId === record.id).map((entry) => entry.id),
+        linkedRequisitionId: record.requisitionId,
+        linkedReceiptId: record.id
+      });
       await writeStore(store);
       return sendJson(res, 200, record);
     } catch (error) {
@@ -997,6 +1423,7 @@ async function routeApi(req, res, pathname) {
     const body = await readBody(req);
     const lines = (body.lines || []).filter((line) => normalizeText(line.itemName || line.name));
     if (!lines.length) return sendError(res, 400, "Add at least one issued item.");
+    const beforeItemIds = new Set(store.items.map((item) => item.id));
     const issue = {
       id: nextId(store, "issue", "ISS"),
       date: body.date || new Date().toISOString().slice(0, 10),
@@ -1010,23 +1437,25 @@ async function routeApi(req, res, pathname) {
       remarks: normalizeText(body.remarks),
       lines: []
     };
+    const linkedLedgerIds = [];
     for (const line of lines) {
       const item = findOrCreateItem(store, line);
       const quantity = qtyNumber(line.quantity);
       if (availableQty(store, item.id) < quantity) {
         return sendError(res, 400, `Insufficient stock for ${item.name}. Available: ${availableQty(store, item.id)} ${item.unit}`);
       }
-      const unit = normalizeText(line.unit || item.unit);
+      const unit = normalizeText(item.unit || line.unit);
+      const category = normalizeText(item.category || line.category || line.specification);
       issue.lines.push({
         itemId: item.id,
         itemName: item.name,
-        category: normalizeText(line.category || line.specification),
-        specification: normalizeText(line.category || line.specification),
+        category,
+        specification: category,
         quantity,
         unit,
         remarks: normalizeText(line.remarks)
       });
-      addLedgerMovement(store, {
+      linkedLedgerIds.push(addLedgerMovement(store, {
         type: "ISSUE",
         date: issue.date,
         item,
@@ -1042,9 +1471,9 @@ async function routeApi(req, res, pathname) {
         documentNo: issue.issueChallanNo,
         dutyPerson: issue.issuedTo,
         remarks: issue.remarks
-      });
+      }).id);
       if (issue.infrastructureId) {
-        addLedgerMovement(store, {
+        linkedLedgerIds.push(addLedgerMovement(store, {
           type: "TRANSFER_IN",
           date: issue.date,
           item,
@@ -1060,10 +1489,22 @@ async function routeApi(req, res, pathname) {
           documentNo: issue.issueChallanNo,
           dutyPerson: issue.issuedTo,
           remarks: issue.remarks
-        });
+        }).id);
       }
     }
     store.issues.push(issue);
+    appendNewItemAudits(store, req, user, beforeItemIds);
+    appendAuditEvent(store, req, user, {
+      eventType: "STOCK_MOVEMENT",
+      entityType: "issue",
+      entityId: issue.id,
+      entityLabel: issue.issueChallanNo || issue.id,
+      after: issue,
+      remarks: issue.remarks,
+      documentNo: issue.issueChallanNo,
+      linkedLedgerIds,
+      linkedIssueId: issue.id
+    });
     await writeStore(store);
     return sendJson(res, 201, issue);
   }
@@ -1073,12 +1514,25 @@ async function routeApi(req, res, pathname) {
     if (!adminOnly(user)) return sendError(res, 403, "Only admin can edit or delete issues.");
     try {
       const record = findRecord(store.issues, issueIdForEdit, "Issue");
+      const before = cloneForAudit(record);
       if (req.method === "DELETE") {
         softDelete(record, user);
         for (const movement of store.ledger.filter((entry) => entry.referenceType === "issue" && entry.referenceId === record.id)) softDelete(movement, user);
       } else {
         applyBasicPatch(record, await readBody(req), ["date", "budgetHeadId", "infrastructureId", "issueChallanNo", "issuedTo", "remarks"]);
       }
+      appendAuditEvent(store, req, user, {
+        eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
+        entityType: "issue",
+        entityId: record.id,
+        entityLabel: record.issueChallanNo || record.id,
+        before,
+        after: record,
+        remarks: record.remarks,
+        documentNo: record.issueChallanNo,
+        linkedLedgerIds: store.ledger.filter((entry) => entry.referenceType === "issue" && entry.referenceId === record.id).map((entry) => entry.id),
+        linkedIssueId: record.id
+      });
       await writeStore(store);
       return sendJson(res, 200, record);
     } catch (error) {

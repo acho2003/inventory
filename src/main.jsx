@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Activity,
   BarChart3,
   Boxes,
   ClipboardList,
@@ -76,6 +77,30 @@ function can(user, permission) {
   return Boolean(user?.permissions?.includes(permission));
 }
 
+const viewPermissions = {
+  dashboard: ["dashboard:read"],
+  projects: ["project:read"],
+  requisitions: ["requisition:read", "requisition:create"],
+  approvals: ["requisition:first_approve", "requisition:final_approve"],
+  receive: ["receipt:create"],
+  inventory: ["inventory:read"],
+  issue: ["issue:create"],
+  reports: ["report:read"],
+  audit: ["audit:read"]
+};
+
+function canAny(user, permissions = []) {
+  return permissions.some((permission) => can(user, permission));
+}
+
+function viewAllowed(user, view) {
+  return canAny(user, viewPermissions[view] || []);
+}
+
+function firstAllowedView(user) {
+  return ["dashboard", "requisitions", "approvals", "receive", "inventory", "issue", "projects", "reports", "audit"].find((entry) => viewAllowed(user, entry)) || "requisitions";
+}
+
 function today() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -142,6 +167,19 @@ function amountUsedFor(receipts = [], field, id) {
     .reduce((sum, receipt) => sum + (receipt.lines || []).reduce((lineSum, line) => lineSum + Number(line.amount || 0), 0), 0);
 }
 
+function lineAmount(line = {}) {
+  const amount = Number(line.amount || 0);
+  if (amount > 0) return amount;
+  return Number(line.rate || 0) * Number(line.quantity || 0);
+}
+
+function amountCommittedFor(requisitions = [], field, id) {
+  const activeStatuses = new Set(["STORE_VERIFIED", "APPROVED", "ORDERED", "PARTIALLY_RECEIVED"]);
+  return requisitions
+    .filter((requisition) => activeStatuses.has(requisition.status) && requisition[field] === id)
+    .reduce((sum, requisition) => sum + (requisition.lines || []).reduce((lineSum, line) => lineSum + lineAmount(line), 0), 0);
+}
+
 function requisitionReceivedQty(receipts = [], requisitionId, itemId) {
   return receipts
     .filter((receipt) => receipt.requisitionId === requisitionId)
@@ -153,12 +191,14 @@ function requisitionReceivedQty(receipts = [], requisitionId, itemId) {
 function budgetUsageRows(data) {
   return data.budgetHeads.map((head) => {
     const used = amountUsedFor(data.receipts, "budgetHeadId", head.id);
+    const committed = amountCommittedFor(data.requisitions, "budgetHeadId", head.id);
     const amount = Number(head.amount || 0);
     return {
       id: head.id,
       name: head.name,
       amount,
       status: head.status || "Active",
+      committed,
       used,
       balance: amount - used
     };
@@ -168,12 +208,14 @@ function budgetUsageRows(data) {
 function infrastructureUsageRows(data) {
   return data.infrastructures.map((infra) => {
     const used = amountUsedFor(data.receipts, "infrastructureId", infra.id);
+    const committed = amountCommittedFor(data.requisitions, "infrastructureId", infra.id);
     const amount = Number(infra.amount || 0);
     return {
       id: infra.id,
       name: infra.name,
       amount,
       status: infra.status || "Active",
+      committed,
       used,
       balance: amount - used
     };
@@ -254,36 +296,53 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem("yarju_token") || "");
   const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
-  const [data, setData] = useState({ dashboard: null, projects: [], budgetHeads: [], infrastructures: [], items: [], requisitions: [], receipts: [], issues: [], inventory: [], ledger: [], stockEvents: [], reports: null });
+  const [data, setData] = useState({ dashboard: null, projects: [], budgetHeads: [], infrastructures: [], items: [], requisitions: [], receipts: [], issues: [], inventory: [], ledger: [], stockEvents: [], auditEvents: [], auditSummary: null, reports: null });
   const [loading, setLoading] = useState(true);
   const api = useApi(token);
 
-  async function loadBase() {
+  async function fetchIf(allowed, path, fallback) {
+    return allowed ? api(path) : fallback;
+  }
+
+  async function loadBase(currentUser = user) {
     const [dashboard, projects, budgetHeads, infrastructures, items, requisitions, receipts, issues, inventory, stockEvents] = await Promise.all([
-      api("/api/dashboard"),
-      api("/api/projects"),
-      api("/api/budget-heads"),
-      api("/api/infrastructures"),
-      api("/api/items"),
-      api("/api/requisitions"),
-      api("/api/receipts"),
-      api("/api/issues"),
-      api("/api/inventory"),
-      api("/api/stock-events")
+      fetchIf(can(currentUser, "dashboard:read"), "/api/dashboard", null),
+      fetchIf(can(currentUser, "project:read"), "/api/projects", []),
+      fetchIf(can(currentUser, "budget:read"), "/api/budget-heads", []),
+      fetchIf(can(currentUser, "infrastructure:read"), "/api/infrastructures", []),
+      fetchIf(can(currentUser, "item:read"), "/api/items", []),
+      fetchIf(can(currentUser, "requisition:read"), "/api/requisitions", []),
+      fetchIf(can(currentUser, "receipt:read"), "/api/receipts", []),
+      fetchIf(can(currentUser, "issue:read"), "/api/issues", []),
+      fetchIf(can(currentUser, "inventory:read"), "/api/inventory", []),
+      fetchIf(can(currentUser, "stock:event:read"), "/api/stock-events", [])
     ]);
     setData((prev) => ({ ...prev, dashboard, projects, budgetHeads, infrastructures, items, requisitions, receipts, issues, inventory, stockEvents }));
   }
 
-  async function refresh(nextView = view) {
+  async function refresh(nextView = view, currentUser = user) {
     if (!token) return;
-    await loadBase();
-    if (nextView === "inventory" || nextView === "projects") {
+    await loadBase(currentUser);
+    if (can(currentUser, "ledger:read") && (nextView === "inventory" || nextView === "projects")) {
       const ledger = await api("/api/ledger");
       setData((prev) => ({ ...prev, ledger }));
     }
-    if (nextView === "reports") {
+    if (!can(currentUser, "ledger:read")) {
+      setData((prev) => ({ ...prev, ledger: [] }));
+    }
+    if (can(currentUser, "report:read") && nextView === "reports") {
       const reports = await api("/api/reports");
       setData((prev) => ({ ...prev, reports }));
+    }
+    if (!can(currentUser, "report:read")) {
+      setData((prev) => ({ ...prev, reports: null }));
+    }
+    if (can(currentUser, "audit:read") && nextView === "audit") {
+      const [auditEvents, auditSummary] = await Promise.all([api("/api/audit-events"), api("/api/audit-summary")]);
+      setData((prev) => ({ ...prev, auditEvents, auditSummary }));
+    }
+    if (!can(currentUser, "audit:read")) {
+      setData((prev) => ({ ...prev, auditEvents: [], auditSummary: null }));
     }
   }
 
@@ -298,7 +357,9 @@ function App() {
         const me = await api("/api/me");
         if (cancelled) return;
         setUser(me);
-        await refresh();
+        const allowedView = firstAllowedView(me);
+        setView(allowedView);
+        await refresh(allowedView, me);
       } catch {
         localStorage.removeItem("yarju_token");
         setToken("");
@@ -315,25 +376,32 @@ function App() {
     localStorage.setItem("yarju_token", result.token);
     setToken(result.token);
     setUser(result.user);
+    setView(firstAllowedView(result.user));
   }
 
   async function changeView(nextView) {
+    if (!viewAllowed(user, nextView)) return;
     setView(nextView);
     await refresh(nextView);
   }
+
+  useEffect(() => {
+    if (user && !viewAllowed(user, view)) setView(firstAllowedView(user));
+  }, [user, view]);
 
   if (loading) return <div className="login"><div className="panel">Loading...</div></div>;
   if (!token || !user) return <Login onLogin={login} />;
 
   const navItems = [
-    ["dashboard", "Dashboard", BarChart3, true],
-    ["projects", "Budget Heads", FolderKanban, true],
-    ["requisitions", "Requisitions", ClipboardList, true],
-    ["approvals", "Approvals", ShieldCheck, can(user, "requisition:first_approve") || can(user, "requisition:final_approve")],
-    ["receive", "Receive Stock", PackageCheck, can(user, "receipt:create")],
-    ["inventory", "Inventory", Boxes, true],
-    ["issue", "Issue Stock", PackageMinus, can(user, "issue:create")],
-    ["reports", "Reports", FileDown, can(user, "report:read")]
+    ["dashboard", "Dashboard", BarChart3, viewAllowed(user, "dashboard")],
+    ["projects", "Budget Heads", FolderKanban, viewAllowed(user, "projects")],
+    ["requisitions", "Requisitions", ClipboardList, viewAllowed(user, "requisitions")],
+    ["approvals", "Approvals", ShieldCheck, viewAllowed(user, "approvals")],
+    ["receive", "Receive Stock", PackageCheck, viewAllowed(user, "receive")],
+    ["inventory", "Inventory", Boxes, viewAllowed(user, "inventory")],
+    ["issue", "Issue Stock", PackageMinus, viewAllowed(user, "issue")],
+    ["reports", "Reports", FileDown, viewAllowed(user, "reports")],
+    ["audit", "Audit Trail", Activity, viewAllowed(user, "audit")]
   ];
 
   return (
@@ -364,7 +432,7 @@ function App() {
         </button>
       </aside>
       <main className="content">
-        <CurrentView view={view} user={user} data={data} api={api} refresh={refresh} setView={setView} />
+        <CurrentView view={view} user={user} data={data} api={api} refresh={refresh} setView={setView} token={token} />
       </main>
     </section>
   );
@@ -383,6 +451,7 @@ function Header({ title, subtitle, eyebrow }) {
 }
 
 function CurrentView(props) {
+  if (!viewAllowed(props.user, props.view)) return <AccessDenied />;
   if (props.view === "dashboard") return <Dashboard {...props} />;
   if (props.view === "projects") return <ProjectsPage {...props} />;
   if (props.view === "requisitions") return <Requisitions {...props} />;
@@ -391,6 +460,15 @@ function CurrentView(props) {
   if (props.view === "inventory") return <Inventory {...props} />;
   if (props.view === "issue") return <IssueStock {...props} />;
   if (props.view === "reports") return <Reports {...props} />;
+  if (props.view === "audit") return <AuditTrail {...props} />;
+}
+
+function AccessDenied() {
+  return (
+    <div className="panel">
+      <PanelTitle title="Access restricted" subtitle="This role is not allowed to view this feature." />
+    </div>
+  );
 }
 
 function Dashboard({ data, user, api, refresh }) {
@@ -411,11 +489,11 @@ function Dashboard({ data, user, api, refresh }) {
       <WorkflowStrip />
       <div className="grid two">
         <div className="panel">
-          <PanelTitle title="Budget Head Chart" subtitle="Used amount and remaining balance for each budget head." />
+          <PanelTitle title="Budget Head Chart" subtitle="Committed order value, received/used amount, and remaining balance." />
           <UsageBarChart rows={budgetRows} emptyText="No budget heads yet." />
         </div>
         <div className="panel">
-          <PanelTitle title="Key Infrastructure Chart" subtitle="Used amount and remaining balance for each infrastructure." />
+          <PanelTitle title="Key Infrastructure Chart" subtitle="Committed order value, received/used amount, and remaining balance." />
           <UsageBarChart rows={infraRows} emptyText="No key infrastructure yet." />
         </div>
       </div>
@@ -438,11 +516,11 @@ function Dashboard({ data, user, api, refresh }) {
       </div>
       <div className="grid two">
         <div className="panel">
-          <PanelTitle title="Budget Head Usage" subtitle="Amount used and balance by budget head." />
+          <PanelTitle title="Budget Head Usage" subtitle="Budget amount, committed orders, received/used amount, and balance." />
           <UsageTable rows={budgetRows} emptyText="No budget heads yet." />
         </div>
         <div className="panel">
-          <PanelTitle title="Key Infrastructure Usage" subtitle="Amount used and balance by infrastructure." />
+          <PanelTitle title="Key Infrastructure Usage" subtitle="Budget amount, committed orders, received/used amount, and balance." />
           <UsageTable rows={infraRows} emptyText="No key infrastructure yet." />
         </div>
       </div>
@@ -568,7 +646,8 @@ function AdminCrudPanel({ data, api, refresh }) {
 }
 
 function Kpi({ label, value }) {
-  return <div className="kpi"><span>{label}</span><strong>{num(value)}</strong></div>;
+  const display = typeof value === "number" || (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) ? num(value) : fmt(value);
+  return <div className="kpi"><span>{label}</span><strong>{display}</strong></div>;
 }
 
 function UsageTable({ rows, emptyText }) {
@@ -576,12 +655,13 @@ function UsageTable({ rows, emptyText }) {
   return (
     <div className="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Amount</th><th>Used</th><th>Balance</th><th>Status</th></tr></thead>
+        <thead><tr><th>Name</th><th>Budget Amount</th><th>Committed</th><th>Used</th><th>Balance</th><th>Status</th></tr></thead>
         <tbody>
           {rows.slice(0, 12).map((row) => (
             <tr key={row.id}>
               <td><strong>{row.name}</strong></td>
               <td>{num(row.amount)}</td>
+              <td>{num(row.committed)}</td>
               <td>{num(row.used)}</td>
               <td><strong className={row.balance < 0 ? "negative" : "positive"}>{num(row.balance)}</strong></td>
               <td><span className="status">{row.status}</span></td>
@@ -599,22 +679,27 @@ function UsageBarChart({ rows, emptyText }) {
     <div className="usage-chart">
       {rows.slice(0, 10).map((row) => {
         const used = Math.max(0, Number(row.used || 0));
+        const committed = Math.max(0, Number(row.committed || 0));
         const balance = Math.max(0, Number(row.balance || 0));
-        const total = Math.max(used + balance, Number(row.amount || 0), 1);
+        const pending = Math.max(0, committed - used);
+        const total = Math.max(used + pending + balance, Number(row.amount || 0), 1);
         const usedPct = Math.min(100, (used / total) * 100);
-        const balancePct = Math.max(0, 100 - usedPct);
+        const pendingPct = Math.min(100 - usedPct, (pending / total) * 100);
+        const balancePct = Math.max(0, 100 - usedPct - pendingPct);
         return (
           <div className="usage-bar-row" key={row.id}>
             <div className="usage-bar-head">
               <strong>{row.name}</strong>
               <span>{num(row.amount)}</span>
             </div>
-            <div className="stacked-bar" aria-label={`${row.name}: used ${num(used)}, balance ${num(balance)}`}>
+            <div className="stacked-bar" aria-label={`${row.name}: used ${num(used)}, committed ${num(committed)}, balance ${num(balance)}`}>
               <span className="bar-used" style={{ width: `${usedPct}%` }} />
+              <span className="bar-committed" style={{ width: `${pendingPct}%` }} />
               <span className="bar-balance" style={{ width: `${balancePct}%` }} />
             </div>
             <div className="usage-legend">
               <span><i className="legend-used" /> Used {num(used)}</span>
+              <span><i className="legend-committed" /> Pending {num(pending)}</span>
               <span><i className="legend-balance" /> Balance {num(row.balance)}</span>
             </div>
           </div>
@@ -788,9 +873,18 @@ function DetailBlock({ title, rows }) {
   );
 }
 
-function LineEditor({ items, lines, setLines, receipt = false, arrival = false }) {
+function LineEditor({ items, lines, setLines, receipt = false, arrival = false, inventory = [] }) {
   function update(index, patch) {
     setLines(lines.map((line, i) => i === index ? { ...line, ...patch } : line));
+  }
+  function matchItem(name) {
+    const key = String(name || "").trim().toLowerCase();
+    return items.find((item) => item.name.toLowerCase() === key);
+  }
+  function stockForLine(line) {
+    const item = line.itemId ? items.find((entry) => entry.id === line.itemId) : matchItem(line.itemName);
+    if (!item) return null;
+    return inventory.filter((entry) => entry.itemId === item.id && !entry.infrastructureId).reduce((sum, entry) => sum + Number(entry.balance || 0), 0);
   }
   return (
     <div className="line-section">
@@ -808,7 +902,16 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false }
       <div className="line-editor">
         {lines.map((line, index) => (
           <div className={`line-row ${receipt ? "receipt-line" : ""}`} key={index}>
-            <label>Item <input list="itemOptions" value={line.itemName} onChange={(e) => update(index, { itemName: e.target.value })} required /></label>
+            <label>Item <input list="itemOptions" value={line.itemName} onChange={(e) => {
+              const item = matchItem(e.target.value);
+              update(index, {
+                itemName: e.target.value,
+                itemId: item?.id || line.itemId || "",
+                category: item?.category || line.category,
+                specification: item?.category || line.specification,
+                unit: item?.unit || line.unit
+              });
+            }} required /></label>
             <label>Category
               <select value={line.category ?? line.specification ?? ""} onChange={(e) => update(index, { category: e.target.value, specification: e.target.value })}>
                 <option value="">Select category</option>
@@ -816,7 +919,7 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false }
               </select>
             </label>
             <label>Qty <input type="number" step="0.01" min="0.01" value={line.quantity} onChange={(e) => update(index, { quantity: e.target.value })} required /></label>
-            <label>Unit <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} /></label>
+            <label>Unit <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} />{inventory.length && stockForLine(line) !== null ? <span className="stock-hint">Store stock: {num(stockForLine(line))} {line.unit}</span> : null}</label>
             {receipt ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => update(index, { rate: e.target.value })} /></label> : null}
             {receipt ? <label>Amount <input type="number" step="0.01" min="0" value={line.amount || ""} onChange={(e) => update(index, { amount: e.target.value })} /></label> : null}
             {arrival ? <label className="check-label">Arrived <input type="checkbox" checked={line.reached !== false} onChange={(e) => update(index, { reached: e.target.checked })} /></label> : null}
@@ -861,6 +964,12 @@ function Requisitions({ user, data, api, refresh }) {
       <Header title="Requisitions" eyebrow="Request materials" subtitle="Order request, store verification, final approval, then order placement." />
       <div className="requisition-stack">
         <ApprovalStatusPanel requisitions={data.requisitions} receipts={data.receipts} />
+        {can(user, "requisition:create") && (!data.budgetHeads.length || !data.items.length) ? (
+          <div className="workflow-note">
+            <strong>Setup needed before requests can move smoothly.</strong>
+            <span>Add budget heads, key infrastructures, and item names first so requisitions can be linked and tracked cleanly.</span>
+          </div>
+        ) : null}
         {can(user, "requisition:create") ? (
           <form className="panel grid requisition-form-panel" onSubmit={submit}>
             <PanelTitle title="New Requisition" subtitle="Enter the request details. Document numbers are added only when stock is received." />
@@ -1044,6 +1153,7 @@ function ApprovalRow({ row, user, updateStatus }) {
         <span className={`status ${row.status}`}>{statusLabels[row.status] || row.status}</span>
       </div>
       {row.status === "REJECTED" && row.rejectionReason ? <div className="rejection-note">Rejected: {row.rejectionReason}</div> : null}
+      <ApprovalTimeline row={row} />
       <OrderedItemsTable lines={row.lines || []} />
       <div>
         <div className="actions">
@@ -1053,6 +1163,23 @@ function ApprovalRow({ row, user, updateStatus }) {
           {row.status !== "APPROVED" && (can(user, "requisition:first_approve") || can(user, "requisition:final_approve")) ? <button className="danger" onClick={() => updateStatus(row.id, "reject")}>Reject</button> : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ApprovalTimeline({ row }) {
+  const steps = [
+    ["SUBMITTED", "Submitted"],
+    ["STORE_VERIFIED", "Store verified"],
+    ["APPROVED", "Final approved"],
+    ["ORDERED", "Order placed"]
+  ];
+  const currentIndex = Math.max(0, steps.findIndex(([status]) => status === row.status));
+  return (
+    <div className="approval-timeline">
+      {steps.map(([status, label], index) => (
+        <span key={status} className={index <= currentIndex ? "done" : ""}>{label}</span>
+      ))}
     </div>
   );
 }
@@ -1136,16 +1263,19 @@ function ReceiveStock({ data, api, refresh, setView }) {
           <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
           <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
         </div>
-        <div className="grid three">
-          <label>Challan No <input value={form.challanNo} onChange={(e) => setForm({ ...form, challanNo: e.target.value })} /></label>
-          <label>DV No(s) <input value={form.dvNo} onChange={(e) => setForm({ ...form, dvNo: e.target.value })} /></label>
-          <label>Bill No(s) <input value={form.billNo} onChange={(e) => setForm({ ...form, billNo: e.target.value })} /></label>
-        </div>
-        <div className="grid four">
-          <label>Challan Date <input type="date" value={form.challanDate} onChange={(e) => setForm({ ...form, challanDate: e.target.value })} /></label>
-          <label>DV Date <input type="date" value={form.dvDate} onChange={(e) => setForm({ ...form, dvDate: e.target.value })} /></label>
-          <label>Bill Date <input type="date" value={form.billDate} onChange={(e) => setForm({ ...form, billDate: e.target.value })} /></label>
-          <label>Dispatch No <input value={form.dispatchNo} onChange={(e) => setForm({ ...form, dispatchNo: e.target.value })} /></label>
+        <div className="document-band">
+          <PanelTitle title="Arrival Documents" subtitle="Record these only after approved stock reaches the store or site." />
+          <div className="grid three">
+            <label>Challan No <input value={form.challanNo} onChange={(e) => setForm({ ...form, challanNo: e.target.value })} /></label>
+            <label>DV No(s) <input value={form.dvNo} onChange={(e) => setForm({ ...form, dvNo: e.target.value })} /></label>
+            <label>Bill No(s) <input value={form.billNo} onChange={(e) => setForm({ ...form, billNo: e.target.value })} /></label>
+          </div>
+          <div className="grid four">
+            <label>Challan Date <input type="date" value={form.challanDate} onChange={(e) => setForm({ ...form, challanDate: e.target.value })} /></label>
+            <label>DV Date <input type="date" value={form.dvDate} onChange={(e) => setForm({ ...form, dvDate: e.target.value })} /></label>
+            <label>Bill Date <input type="date" value={form.billDate} onChange={(e) => setForm({ ...form, billDate: e.target.value })} /></label>
+            <label>Dispatch No <input value={form.dispatchNo} onChange={(e) => setForm({ ...form, dispatchNo: e.target.value })} /></label>
+          </div>
         </div>
         <LineEditor items={data.items} lines={lines} setLines={setLines} receipt arrival />
         <label>Remarks <textarea rows="2" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
@@ -1156,6 +1286,7 @@ function ReceiveStock({ data, api, refresh, setView }) {
 }
 
 function Inventory({ data, api, refresh, user }) {
+  const [traceItemId, setTraceItemId] = useState("");
   const infrastructureMap = byId(data.infrastructures);
   const groups = [];
   for (const infrastructure of data.infrastructures) {
@@ -1180,6 +1311,7 @@ function Inventory({ data, api, refresh, user }) {
         <PanelTitle title="All Stock Summary" subtitle="Complete stock balance across store and infrastructure movements." />
         <InventoryTable rows={data.inventory} infrastructures={data.infrastructures} />
       </div>
+      <ItemTracePanel data={data} traceItemId={traceItemId} setTraceItemId={setTraceItemId} />
       <div className="inventory-groups">
         {activeGroups.map((group) => <InfrastructureInventorySection key={group.id} group={group} />)}
         {unassignedStock.length || unassignedLedger.length ? (
@@ -1200,6 +1332,45 @@ function Inventory({ data, api, refresh, user }) {
         </div>
       </div>
     </>
+  );
+}
+
+function ItemTracePanel({ data, traceItemId, setTraceItemId }) {
+  const infrastructureMap = byId(data.infrastructures);
+  const rows = data.ledger
+    .filter((row) => !traceItemId || row.itemId === traceItemId)
+    .slice()
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  return (
+    <div className="panel">
+      <PanelTitle title="Item Trace" subtitle="Select an item to inspect its full lifecycle and movement history." />
+      <div className="table-tools">
+        <select value={traceItemId} onChange={(e) => setTraceItemId(e.target.value)}>
+          <option value="">All items</option>
+          {data.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+      </div>
+      <div className="table-wrap full-ledger-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Lifecycle</th><th>Type</th><th>Item</th><th>Qty</th><th>From</th><th>To / Location</th><th>Document</th><th>Duty Person</th><th>Remarks</th></tr></thead>
+          <tbody>{rows.map((row) => (
+            <tr key={row.id}>
+              <td>{fmt(row.date)}</td>
+              <td><span className="status">{fmt(row.lifecycleStatus)}</span></td>
+              <td>{fmt(row.type)}</td>
+              <td><strong>{fmt(row.itemName)}</strong></td>
+              <td>{num(row.quantity)} {fmt(row.unit)}</td>
+              <td>{fmt(infrastructureMap[row.fromInfrastructureId]?.name || (row.fromInfrastructureId ? row.fromInfrastructureId : "Store"))}</td>
+              <td>{fmt(infrastructureMap[row.toInfrastructureId]?.name || infrastructureMap[row.infrastructureId]?.name || (row.toInfrastructureId ? row.toInfrastructureId : "Store"))}</td>
+              <td>{fmt(row.documentNo)}</td>
+              <td>{fmt(row.dutyPerson || row.createdByName)}</td>
+              <td>{fmt(row.remarks)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {!rows.length ? <div className="empty compact-empty">No lifecycle movements found.</div> : null}
+    </div>
   );
 }
 
@@ -1297,8 +1468,8 @@ function LedgerTable({ rows, compact = false, infrastructures = [] }) {
   if (!rows.length) return <div className="empty">No ledger movements found.</div>;
   return (
     <table>
-      <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Unit</th>{compact ? null : <th>From</th>}{compact ? null : <th>To</th>}{compact ? null : <th>Document</th>}{compact ? null : <th>Duty Person</th>}{compact ? null : <th>Remarks</th>}</tr></thead>
-      <tbody>{rows.map((r) => <tr key={r.id}><td>{fmt(r.date)}</td><td>{fmt(r.type)}</td><td>{fmt(r.itemName)}</td><td>{num(r.quantity)}</td><td>{fmt(r.unit)}</td>{compact ? null : <td>{fmt(infrastructureMap[r.fromInfrastructureId]?.name || (r.fromInfrastructureId ? r.fromInfrastructureId : "Store"))}</td>}{compact ? null : <td>{fmt(infrastructureMap[r.toInfrastructureId]?.name || (r.toInfrastructureId ? r.toInfrastructureId : ""))}</td>}{compact ? null : <td>{fmt(r.documentNo)}</td>}{compact ? null : <td>{fmt(r.dutyPerson || r.createdByName)}</td>}{compact ? null : <td>{fmt(r.remarks)}</td>}</tr>)}</tbody>
+      <thead><tr><th>Date</th><th>Type</th>{compact ? null : <th>Lifecycle</th>}<th>Item</th><th>Qty</th><th>Unit</th>{compact ? null : <th>From</th>}{compact ? null : <th>To</th>}{compact ? null : <th>Document</th>}{compact ? null : <th>Duty Person</th>}{compact ? null : <th>Remarks</th>}</tr></thead>
+      <tbody>{rows.map((r) => <tr key={r.id}><td>{fmt(r.date)}</td><td>{fmt(r.type)}</td>{compact ? null : <td><span className="status">{fmt(r.lifecycleStatus)}</span></td>}<td>{fmt(r.itemName)}</td><td>{num(r.quantity)}</td><td>{fmt(r.unit)}</td>{compact ? null : <td>{fmt(infrastructureMap[r.fromInfrastructureId]?.name || (r.fromInfrastructureId ? r.fromInfrastructureId : "Store"))}</td>}{compact ? null : <td>{fmt(infrastructureMap[r.toInfrastructureId]?.name || (r.toInfrastructureId ? r.toInfrastructureId : ""))}</td>}{compact ? null : <td>{fmt(r.documentNo)}</td>}{compact ? null : <td>{fmt(r.dutyPerson || r.createdByName)}</td>}{compact ? null : <td>{fmt(r.remarks)}</td>}</tr>)}</tbody>
     </table>
   );
 }
@@ -1368,7 +1539,11 @@ function IssueStock({ data, api, refresh, setView }) {
           <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
           <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
         </div>
-        <LineEditor items={data.items} lines={lines} setLines={setLines} />
+        <div className="workflow-note">
+          <strong>Issue preview</strong>
+          <span>Stock will reduce from Store and be traced to the selected key infrastructure and duty personnel.</span>
+        </div>
+        <LineEditor items={data.items} lines={lines} setLines={setLines} inventory={data.inventory} />
         <label>Remarks <textarea rows="2" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
         <button className="primary" type="submit">Issue stock</button>
       </form>
@@ -1396,6 +1571,116 @@ function Reports({ data }) {
         </div>
       </div>
     </>
+  );
+}
+
+function AuditTrail({ data, token }) {
+  const [query, setQuery] = useState("");
+  const [eventType, setEventType] = useState("all");
+  const [entityType, setEntityType] = useState("all");
+  const [actor, setActor] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const summary = data.auditSummary;
+  const events = data.auditEvents || [];
+  const eventTypes = [...new Set(events.map((event) => event.eventType).filter(Boolean))].sort();
+  const entityTypes = [...new Set(events.map((event) => event.entityType).filter(Boolean))].sort();
+  const actors = [...new Set(events.map((event) => event.actorName).filter(Boolean))].sort();
+  const filtered = events.filter((event) => {
+    const date = String(event.at || "").slice(0, 10);
+    return (eventType === "all" || event.eventType === eventType)
+      && (entityType === "all" || event.entityType === entityType)
+      && (actor === "all" || event.actorName === actor)
+      && (!dateFrom || date >= dateFrom)
+      && (!dateTo || date <= dateTo)
+      && matchesSearch([event.id, event.actorName, event.actorRole, event.eventType, event.entityType, event.entityLabel, event.reason, event.remarks, event.documentNo, event.hash], query);
+  });
+
+  async function exportCsv() {
+    const res = await fetch("/api/audit-events/export.csv", { headers: { Authorization: `Bearer ${token}` } });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "audit-events.csv";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <>
+      <Header title="Audit Trail" eyebrow="Accountability" subtitle="Immutable event history, exception checks, and tamper-evidence status." />
+      <div className="grid four">
+        <Kpi label="Audit Events" value={summary?.totalAuditEvents || 0} />
+        <Kpi label="Hash Chain" value={summary?.hashChainValid ? "Valid" : "Broken"} />
+        <Kpi label="Missing Bills" value={summary?.exceptions?.missingBill || 0} />
+        <Kpi label="Deleted Records" value={summary?.exceptions?.deletedTotal || 0} />
+      </div>
+      <div className={summary?.hashChainValid ? "hash-banner valid" : "hash-banner broken"}>
+        <strong>{summary?.hashChainValid ? "Audit chain verified" : "Audit chain needs review"}</strong>
+        <span>{summary?.hashChainValid ? "Every audit event currently matches the tamper-evidence chain." : "The audit hash chain did not validate. Review audit storage before relying on reports."}</span>
+      </div>
+      <AuditExceptionCards summary={summary} />
+      <div className="panel">
+        <PanelTitle title="Audit Events" subtitle="Filter by date, user, action, entity, item, requisition, or document number." />
+        <div className="table-tools audit-tools">
+          <SearchBox value={query} onChange={setQuery} placeholder="Search audit trail" />
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+          <select value={eventType} onChange={(e) => setEventType(e.target.value)}><option value="all">All actions</option>{eventTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select>
+          <select value={entityType} onChange={(e) => setEntityType(e.target.value)}><option value="all">All entities</option>{entityTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select>
+          <select value={actor} onChange={(e) => setActor(e.target.value)}><option value="all">All users</option>{actors.map((name) => <option key={name} value={name}>{name}</option>)}</select>
+          <button type="button" onClick={exportCsv}>Export CSV</button>
+        </div>
+        <div className="table-wrap full-ledger-wrap">
+          <table>
+            <thead><tr><th>At</th><th>User</th><th>Action</th><th>Entity</th><th>Label</th><th>Reason / Remarks</th><th>Document</th><th>Changes</th><th>Hash</th></tr></thead>
+            <tbody>{filtered.map((event) => <AuditEventRow key={event.id} event={event} />)}</tbody>
+          </table>
+        </div>
+        {!filtered.length ? <div className="empty compact-empty">No matching audit events.</div> : null}
+      </div>
+    </>
+  );
+}
+
+function AuditExceptionCards({ summary }) {
+  const exceptions = summary?.exceptions || {};
+  const rows = [
+    ["Missing Challan", exceptions.missingChallan || 0],
+    ["Missing DV", exceptions.missingDv || 0],
+    ["Missing Bill", exceptions.missingBill || 0],
+    ["Negative Stock", exceptions.negativeStock || 0],
+    ["Zero Stock", exceptions.zeroStock || 0],
+    ["Rejected Requests", exceptions.rejectedRequests || 0],
+    ["Under Repair", exceptions.underRepair || 0],
+    ["Disposed / Spoiled", exceptions.disposedOrSpoiled || 0]
+  ];
+  return (
+    <div className="panel">
+      <PanelTitle title="Exception Checks" subtitle={`Last audit event: ${fmt(summary?.lastAuditAt)}`} />
+      <div className="exception-grid">
+        {rows.map(([label, value]) => <div className={Number(value) ? "exception-card active" : "exception-card"} key={label}><span>{label}</span><strong>{num(value)}</strong></div>)}
+      </div>
+    </div>
+  );
+}
+
+function AuditEventRow({ event }) {
+  const changeKeys = Object.keys(event.changes || {});
+  const detail = changeKeys.length ? changeKeys.slice(0, 4).join(", ") : event.eventType;
+  return (
+    <tr>
+      <td>{fmt(event.at)}</td>
+      <td><strong>{fmt(event.actorName)}</strong><div className="muted">{fmt(event.actorRole)}</div></td>
+      <td><span className="status">{fmt(event.eventType)}</span></td>
+      <td>{fmt(event.entityType)}</td>
+      <td>{fmt(event.entityLabel)}</td>
+      <td>{fmt(event.reason || event.remarks)}</td>
+      <td>{fmt(event.documentNo)}</td>
+      <td><details><summary>{detail}</summary><pre className="audit-json">{JSON.stringify({ before: event.before, after: event.after, changes: event.changes }, null, 2)}</pre></details></td>
+      <td><code>{String(event.hash || "").slice(0, 12)}</code></td>
+    </tr>
   );
 }
 
