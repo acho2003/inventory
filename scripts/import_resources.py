@@ -54,7 +54,7 @@ def load_store() -> dict[str, Any]:
     if STORE.exists():
         return json.loads(STORE.read_text(encoding="utf-8"))
     return {
-        "meta": {"name": "Inventory System", "createdAt": datetime.utcnow().isoformat()},
+        "meta": {"name": "Yarju_OAP_inventory", "createdAt": datetime.utcnow().isoformat()},
         "users": default_users(),
         "projects": [],
         "budgetHeads": [],
@@ -65,7 +65,8 @@ def load_store() -> dict[str, Any]:
         "issues": [],
         "ledger": [],
         "expenses": [],
-        "counters": {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1, "expense": 1},
+        "stockEvents": [],
+        "counters": {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1, "expense": 1, "stockEvent": 1, "transfer": 1, "adjustment": 1},
     }
 
 
@@ -145,7 +146,17 @@ def reset_imported(store: dict[str, Any]):
     store["issues"] = []
     store["ledger"] = []
     store["expenses"] = []
-    store["counters"] = {"requisition": 1, "receipt": 1, "issue": 1, "movement": 1, "expense": 1}
+    store["stockEvents"] = store.get("stockEvents", [])
+    store["counters"] = {
+        "requisition": 1,
+        "receipt": 1,
+        "issue": 1,
+        "movement": 1,
+        "expense": 1,
+        "stockEvent": len(store["stockEvents"]) + 1,
+        "transfer": 1,
+        "adjustment": 1,
+    }
 
 
 def import_oap(store: dict[str, Any]):

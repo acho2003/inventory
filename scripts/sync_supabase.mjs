@@ -7,7 +7,7 @@ import { createClient } from "@supabase/supabase-js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
 const storePath = path.join(root, "data", "store.json");
-const collections = ["users", "projects", "budgetHeads", "infrastructures", "items", "requisitions", "receipts", "issues", "ledger", "expenses"];
+const collections = ["users", "projects", "budgetHeads", "infrastructures", "items", "requisitions", "receipts", "issues", "ledger", "expenses", "stockEvents"];
 
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error("Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env before syncing.");
@@ -33,6 +33,13 @@ for (const user of defaultUsers) {
   }
 }
 
+store.meta ||= {};
+store.meta.name = "Yarju_OAP_inventory";
+store.stockEvents ||= [];
+store.counters ||= {};
+store.counters.stockEvent ||= 1;
+store.counters.transfer ||= 1;
+store.counters.adjustment ||= 1;
 store.budgetHeads ||= [];
 store.infrastructures ||= [];
 if (!store.budgetHeads.length && Array.isArray(store.projects)) {

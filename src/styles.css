@@ -629,9 +629,8 @@ tbody tr:hover td { background: #f9fbfd; }
 .legend-used { background: var(--navy); }
 .legend-balance { background: var(--accent); }
 
-.requisition-workspace {
+.requisition-stack {
   display: grid;
-  grid-template-columns: minmax(300px, 0.8fr) minmax(0, 1.2fr);
   gap: 12px;
   align-items: start;
 }
@@ -693,6 +692,60 @@ tbody tr:hover td { background: #f9fbfd; }
 .inventory-groups {
   display: grid;
   gap: 14px;
+}
+
+.full-ledger-wrap table {
+  min-width: 980px;
+}
+
+.rejection-note {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.rejection-note.compact {
+  margin-top: 6px;
+  padding: 0;
+  background: transparent;
+}
+
+.admin-crud {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-crud-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.crud-section {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.crud-section h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--navy);
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.inline-actions button {
+  min-height: 32px;
+  padding: 6px 9px;
 }
 
 .infrastructure-stock-section {
@@ -799,10 +852,10 @@ tbody tr:hover td { background: #f9fbfd; }
   .content { padding: 16px; }
   .kpis,
   .workflow-strip,
-  .requisition-workspace,
   .grid.two,
   .grid.three,
-  .grid.four { grid-template-columns: 1fr 1fr; }
+  .grid.four,
+  .admin-crud-grid { grid-template-columns: 1fr 1fr; }
   .line-row,
   .line-row.receipt-line { grid-template-columns: 1fr 1fr; }
   .line-row .icon-button { width: 100%; }
@@ -813,11 +866,11 @@ tbody tr:hover td { background: #f9fbfd; }
   .demo-users,
   .kpis,
   .workflow-strip,
-  .requisition-workspace,
   .status-grid,
   .grid.two,
   .grid.three,
   .grid.four,
+  .admin-crud-grid,
   .line-row,
   .line-row.receipt-line { grid-template-columns: 1fr; }
   .login-copy,

@@ -1,4 +1,4 @@
-# Inventory System
+# Yarju_OAP_inventory
 
 An inventory and requisition system built from the manual Excel/Word records.
 

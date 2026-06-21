@@ -1,7 +1,7 @@
 services:
   - type: web
     runtime: node
-    name: inventory-system
+    name: yarju-oap-inventory
     buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /healthz

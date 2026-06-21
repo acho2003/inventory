@@ -28,6 +28,16 @@ const statusLabels = {
   IMPORTED_FOLLOW_UP: "Imported follow-up"
 };
 
+const APP_NAME = "Yarju_OAP_inventory";
+
+const stockEventTypes = {
+  TRANSFER: "Transfer",
+  DISPOSED: "Disposed",
+  SPOILED: "Spoiled",
+  REPAIR_NOTE: "Repair note",
+  RETURNED_FROM_REPAIR: "Returned from repair"
+};
+
 const itemCategories = [
   "Fuel & Lubricants",
   "Blasting Materials",
@@ -97,22 +107,27 @@ function byId(rows = []) {
 
 function summarizeLedger(rows = []) {
   const stock = new Map();
+  const incomingTypes = new Set(["RECEIPT", "TRANSFER_IN", "RETURNED_FROM_REPAIR", "ADJUSTMENT"]);
+  const outgoingTypes = new Set(["ISSUE", "TRANSFER_OUT", "DISPOSED", "SPOILED"]);
   for (const movement of rows) {
-    const current = stock.get(movement.itemId) || {
+    if (movement.type === "REPAIR_NOTE") continue;
+    const key = `${movement.infrastructureId || ""}::${movement.itemId}`;
+    const current = stock.get(key) || {
       itemId: movement.itemId,
       itemName: movement.itemName,
       category: movement.category || "General",
       unit: movement.unit || "",
+      infrastructureId: movement.infrastructureId || "",
       received: 0,
       issued: 0,
       balance: 0,
       lastMovementAt: movement.date
     };
-    if (movement.type === "RECEIPT") current.received += Number(movement.quantity || 0);
-    if (movement.type === "ISSUE") current.issued += Number(movement.quantity || 0);
+    if (incomingTypes.has(movement.type)) current.received += Number(movement.quantity || 0);
+    if (outgoingTypes.has(movement.type)) current.issued += Number(movement.quantity || 0);
     current.balance = current.received - current.issued;
     if (!current.lastMovementAt || movement.date > current.lastMovementAt) current.lastMovementAt = movement.date;
-    stock.set(movement.itemId, current);
+    stock.set(key, current);
   }
   return [...stock.values()].sort((a, b) => a.itemName.localeCompare(b.itemName));
 }
@@ -203,7 +218,7 @@ function Login({ onLogin }) {
     <section className="login">
       <div className="login-panel">
         <div className="login-copy">
-          <h1>Inventory System</h1>
+          <h1>{APP_NAME}</h1>
           <p>Prepare requisitions, approve material requests, receive stock with Challan/DV/Bill details, and track every item in one ledger.</p>
           <div className="login-steps">
             <span>1. Request</span>
@@ -239,12 +254,12 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem("yarju_token") || "");
   const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
-  const [data, setData] = useState({ dashboard: null, projects: [], budgetHeads: [], infrastructures: [], items: [], requisitions: [], receipts: [], inventory: [], ledger: [], reports: null });
+  const [data, setData] = useState({ dashboard: null, projects: [], budgetHeads: [], infrastructures: [], items: [], requisitions: [], receipts: [], issues: [], inventory: [], ledger: [], stockEvents: [], reports: null });
   const [loading, setLoading] = useState(true);
   const api = useApi(token);
 
   async function loadBase() {
-    const [dashboard, projects, budgetHeads, infrastructures, items, requisitions, receipts, inventory] = await Promise.all([
+    const [dashboard, projects, budgetHeads, infrastructures, items, requisitions, receipts, issues, inventory, stockEvents] = await Promise.all([
       api("/api/dashboard"),
       api("/api/projects"),
       api("/api/budget-heads"),
@@ -252,9 +267,11 @@ function App() {
       api("/api/items"),
       api("/api/requisitions"),
       api("/api/receipts"),
-      api("/api/inventory")
+      api("/api/issues"),
+      api("/api/inventory"),
+      api("/api/stock-events")
     ]);
-    setData((prev) => ({ ...prev, dashboard, projects, budgetHeads, infrastructures, items, requisitions, receipts, inventory }));
+    setData((prev) => ({ ...prev, dashboard, projects, budgetHeads, infrastructures, items, requisitions, receipts, issues, inventory, stockEvents }));
   }
 
   async function refresh(nextView = view) {
@@ -323,7 +340,7 @@ function App() {
     <section className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <strong>Inventory</strong>
+          <strong>{APP_NAME}</strong>
           <span>Materials and stock control</span>
         </div>
         <div className="userbox">
@@ -376,7 +393,7 @@ function CurrentView(props) {
   if (props.view === "reports") return <Reports {...props} />;
 }
 
-function Dashboard({ data }) {
+function Dashboard({ data, user, api, refresh }) {
   const d = data.dashboard;
   if (!d) return <div className="panel">Loading dashboard...</div>;
   const urgent = data.requisitions.filter((r) => ["SUBMITTED", "STORE_VERIFIED", "APPROVED"].includes(r.status)).slice(0, 5);
@@ -429,7 +446,124 @@ function Dashboard({ data }) {
           <UsageTable rows={infraRows} emptyText="No key infrastructure yet." />
         </div>
       </div>
+      {can(user, "admin:crud") ? <AdminCrudPanel data={data} api={api} refresh={refresh} /> : null}
     </>
+  );
+}
+
+function AdminCrudPanel({ data, api, refresh }) {
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function patchRecord(path, record, fields) {
+    const body = {};
+    for (const field of fields) {
+      const current = record[field] ?? "";
+      const next = window.prompt(`Edit ${field}`, current);
+      if (next === null) return;
+      body[field] = next;
+    }
+    setMessage("");
+    setError("");
+    try {
+      await api(`${path}/${record.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMessage("Record updated.");
+      await refresh("dashboard");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function deleteRecord(path, record, label) {
+    if (!window.confirm(`Delete ${label}? This keeps the audit record.`)) return;
+    setMessage("");
+    setError("");
+    try {
+      await api(`${path}/${record.id}`, { method: "DELETE" });
+      setMessage("Record deleted from normal views and kept for audit.");
+      await refresh("dashboard");
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  const sections = [
+    {
+      title: "Budget Heads",
+      path: "/api/budget-heads",
+      rows: data.budgetHeads,
+      fields: ["name", "amount", "status"],
+      columns: [["Name", "name"], ["Amount", "amount"], ["Status", "status"]]
+    },
+    {
+      title: "Key Infrastructures",
+      path: "/api/infrastructures",
+      rows: data.infrastructures,
+      fields: ["name", "amount", "status"],
+      columns: [["Name", "name"], ["Amount", "amount"], ["Status", "status"]]
+    },
+    {
+      title: "Items",
+      path: "/api/items",
+      rows: data.items,
+      fields: ["name", "category", "unit"],
+      columns: [["Name", "name"], ["Category", "category"], ["Unit", "unit"]]
+    },
+    {
+      title: "Requisitions",
+      path: "/api/requisitions",
+      rows: data.requisitions,
+      fields: ["requisitionNo", "status", "purpose"],
+      columns: [["No", "requisitionNo"], ["Status", "status"], ["Purpose", "purpose"]]
+    },
+    {
+      title: "Receipts",
+      path: "/api/receipts",
+      rows: data.receipts,
+      fields: ["challanNo", "dvNo", "billNo", "remarks"],
+      columns: [["Challan", "challanNo"], ["DV", "dvNo"], ["Bill", "billNo"]]
+    },
+    {
+      title: "Issues",
+      path: "/api/issues",
+      rows: data.issues,
+      fields: ["issueChallanNo", "issuedTo", "remarks"],
+      columns: [["Challan", "issueChallanNo"], ["Duty Person", "issuedTo"], ["Remarks", "remarks"]]
+    }
+  ];
+
+  return (
+    <div className="panel admin-crud">
+      <PanelTitle title="Admin Edit / Delete" subtitle="Soft delete hides records from normal views while preserving audit history." />
+      {message ? <div className="success">{message}</div> : null}
+      {error ? <div className="error">{error}</div> : null}
+      <div className="admin-crud-grid">
+        {sections.map((section) => (
+          <div className="crud-section" key={section.title}>
+            <h3>{section.title}</h3>
+            <div className="table-wrap">
+              <table>
+                <thead><tr>{section.columns.map(([label]) => <th key={label}>{label}</th>)}<th>Actions</th></tr></thead>
+                <tbody>
+                  {section.rows.slice(0, 8).map((row) => (
+                    <tr key={row.id}>
+                      {section.columns.map(([, field]) => <td key={field}>{fmt(row[field])}</td>)}
+                      <td>
+                        <div className="inline-actions">
+                          <button type="button" onClick={() => patchRecord(section.path, row, section.fields)}>Edit</button>
+                          <button type="button" className="danger" onClick={() => deleteRecord(section.path, row, fmt(row.name || row.requisitionNo || row.challanNo || row.issueChallanNo || row.id))}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {!section.rows.length ? <tr><td colSpan={section.columns.length + 1}>No records.</td></tr> : null}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -547,11 +681,11 @@ function BudgetHeadSelect({ budgetHeads, value, onChange }) {
   );
 }
 
-function InfrastructureSelect({ infrastructures, value, onChange, budgetHeadId = "" }) {
+function InfrastructureSelect({ infrastructures, value, onChange, budgetHeadId = "", storeOption = false }) {
   const rows = infrastructures.filter((entry) => !budgetHeadId || entry.budgetHeadId === budgetHeadId);
   return (
     <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
-      <option value="">Select infrastructure</option>
+      <option value="">{storeOption ? "Store / Not Assigned" : "Select infrastructure"}</option>
       {rows.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
     </select>
   );
@@ -725,7 +859,7 @@ function Requisitions({ user, data, api, refresh }) {
   return (
     <>
       <Header title="Requisitions" eyebrow="Request materials" subtitle="Order request, store verification, final approval, then order placement." />
-      <div className="requisition-workspace">
+      <div className="requisition-stack">
         <ApprovalStatusPanel requisitions={data.requisitions} receipts={data.receipts} />
         {can(user, "requisition:create") ? (
           <form className="panel grid requisition-form-panel" onSubmit={submit}>
@@ -805,7 +939,7 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
   const [status, setStatus] = useState("all");
   const filtered = rows.filter((r) => {
     const statusOk = status === "all" || r.status === status;
-    const queryOk = matchesSearch([r.requisitionNo, r.requestDate, r.status, r.purpose, r.supplyOrderNo, ...(r.lines || []).map((line) => line.itemName)], query);
+    const queryOk = matchesSearch([r.requisitionNo, r.requestDate, r.status, r.purpose, r.supplyOrderNo, r.rejectionReason, ...(r.lines || []).map((line) => line.itemName)], query);
     return statusOk && queryOk;
   });
   if (!rows.length) return <div className="empty">No requisitions found.</div>;
@@ -831,7 +965,10 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
                 <tr key={r.id}>
                   <td><strong>{fmt(r.requisitionNo)}</strong></td>
                   <td>{fmt(r.requestDate)}</td>
-                  <td><span className={`status ${r.status}`}>{statusLabels[r.status] || r.status}</span></td>
+                  <td>
+                    <span className={`status ${r.status}`}>{statusLabels[r.status] || r.status}</span>
+                    {r.status === "REJECTED" && r.rejectionReason ? <div className="rejection-note compact">Reason: {r.rejectionReason}</div> : null}
+                  </td>
                   <td>{compact ? num(r.lines?.length || 0) : r.lines?.map((l) => <div key={l.id || `${l.itemName}-${l.quantity}`}>{l.itemName} ({num(l.quantity)} {l.unit})</div>)}</td>
                   <td>{num(receivedQty)} / {num(orderedQty)}</td>
                   <td>{fmt(r.purpose)}</td>
@@ -862,6 +999,14 @@ function Approvals({ user, data, api, refresh }) {
   async function updateStatus(id, action) {
     const body = { action };
     if (action === "order") body.supplyOrderNo = window.prompt("Supply Order No") || "";
+    if (action === "reject") {
+      const note = window.prompt("Rejection reason");
+      if (!note || !note.trim()) {
+        setError("Rejection reason is required.");
+        return;
+      }
+      body.note = note.trim();
+    }
     setMessage("");
     setError("");
     try {
@@ -898,6 +1043,7 @@ function ApprovalRow({ row, user, updateStatus }) {
         </div>
         <span className={`status ${row.status}`}>{statusLabels[row.status] || row.status}</span>
       </div>
+      {row.status === "REJECTED" && row.rejectionReason ? <div className="rejection-note">Rejected: {row.rejectionReason}</div> : null}
       <OrderedItemsTable lines={row.lines || []} />
       <div>
         <div className="actions">
@@ -1009,7 +1155,7 @@ function ReceiveStock({ data, api, refresh, setView }) {
   );
 }
 
-function Inventory({ data }) {
+function Inventory({ data, api, refresh, user }) {
   const infrastructureMap = byId(data.infrastructures);
   const groups = [];
   for (const infrastructure of data.infrastructures) {
@@ -1020,12 +1166,19 @@ function Inventory({ data }) {
   const unassignedLedger = data.ledger.filter((row) => !row.infrastructureId || !infrastructureMap[row.infrastructureId]);
   const unassignedStock = summarizeLedger(unassignedLedger);
   const activeGroups = groups.filter((group) => group.stock.length || group.ledger.length);
+  async function submitStockEvent(body) {
+    await api("/api/stock-events", { method: "POST", body: JSON.stringify(body) });
+    await refresh("inventory");
+  }
   return (
     <>
-      <Header title="Inventory" eyebrow="Infrastructure stock balance" subtitle="Stock is grouped automatically by key infrastructure and calculated from receipt and issue movements." />
+      <Header title="Inventory" eyebrow="Stock control" subtitle="Transfer stock, track condition events, and inspect complete ledger history." />
+      {can(user, "stock:event") ? (
+        <StockEventForm data={data} onSubmit={submitStockEvent} />
+      ) : null}
       <div className="panel">
         <PanelTitle title="All Stock Summary" subtitle="Complete stock balance across store and infrastructure movements." />
-        <InventoryTable rows={data.inventory} />
+        <InventoryTable rows={data.inventory} infrastructures={data.infrastructures} />
       </div>
       <div className="inventory-groups">
         {activeGroups.map((group) => <InfrastructureInventorySection key={group.id} group={group} />)}
@@ -1036,7 +1189,64 @@ function Inventory({ data }) {
           <div className="panel"><div className="empty">No infrastructure stock movements found.</div></div>
         ) : null}
       </div>
+      <div className="grid two">
+        <div className="panel">
+          <PanelTitle title="Stock Event History" subtitle="Transfers, disposal, spoilage, and repair records." />
+          <StockEventTable events={data.stockEvents} infrastructures={data.infrastructures} />
+        </div>
+        <div className="panel">
+          <PanelTitle title="Full Ledger History" subtitle="Every receipt, issue, transfer, disposal, spoilage, and repair movement." />
+          <FullLedgerTable rows={data.ledger} infrastructures={data.infrastructures} />
+        </div>
+      </div>
     </>
+  );
+}
+
+function StockEventForm({ data, onSubmit }) {
+  const [form, setForm] = useState({ type: "TRANSFER", date: today(), itemId: "", quantity: "", unit: "", fromInfrastructureId: "", toInfrastructureId: "", dutyPerson: "", documentNo: "", remarks: "" });
+  const [error, setError] = useState("");
+  const selectedItem = data.items.find((item) => item.id === form.itemId);
+  const needsTo = ["TRANSFER", "RETURNED_FROM_REPAIR"].includes(form.type);
+  const needsFrom = ["TRANSFER", "DISPOSED", "SPOILED", "REPAIR_NOTE"].includes(form.type);
+  const quantityRequired = form.type !== "REPAIR_NOTE";
+
+  async function submit(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      await onSubmit({ ...form, unit: form.unit || selectedItem?.unit || "" });
+      setForm({ type: "TRANSFER", date: today(), itemId: "", quantity: "", unit: "", fromInfrastructureId: "", toInfrastructureId: "", dutyPerson: "", documentNo: "", remarks: "" });
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  return (
+    <form className="panel grid" onSubmit={submit}>
+      <PanelTitle title="Transfer / Condition Event" subtitle="Move stock between infrastructures or record disposed, spoiled, repair, and returned-from-repair events." />
+      {error ? <div className="error">{error}</div> : null}
+      <div className="grid four">
+        <label>Event Type <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>{Object.entries(stockEventTypes).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        <label>Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
+        <label>Item <select value={form.itemId} onChange={(e) => {
+          const item = data.items.find((entry) => entry.id === e.target.value);
+          setForm({ ...form, itemId: e.target.value, unit: item?.unit || form.unit });
+        }} required><option value="">Select item</option>{data.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+        <label>Quantity <input type="number" min={quantityRequired ? "0.01" : "0"} step="0.01" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} required={quantityRequired} /></label>
+      </div>
+      <div className="grid four">
+        <label>Unit <input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder={selectedItem?.unit || ""} /></label>
+        {needsFrom ? <label>From <InfrastructureSelect infrastructures={data.infrastructures} value={form.fromInfrastructureId} onChange={(fromInfrastructureId) => setForm({ ...form, fromInfrastructureId })} storeOption /></label> : <div />}
+        {needsTo ? <label>To <InfrastructureSelect infrastructures={data.infrastructures} value={form.toInfrastructureId} onChange={(toInfrastructureId) => setForm({ ...form, toInfrastructureId })} storeOption /></label> : <div />}
+        <label>Document / Reference <input value={form.documentNo} onChange={(e) => setForm({ ...form, documentNo: e.target.value })} /></label>
+      </div>
+      <div className="grid two">
+        <label>Duty Personnel <input value={form.dutyPerson} onChange={(e) => setForm({ ...form, dutyPerson: e.target.value })} /></label>
+        <label>Remarks <input value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
+      </div>
+      <button className="primary" type="submit">Record stock event</button>
+    </form>
   );
 }
 
@@ -1063,17 +1273,18 @@ function InfrastructureInventorySection({ group }) {
   );
 }
 
-function InventoryTable({ rows, compact = false }) {
+function InventoryTable({ rows, compact = false, infrastructures = [] }) {
   const [query, setQuery] = useState("");
-  const filtered = rows.filter((r) => matchesSearch([r.itemName, r.category, r.unit, r.lastMovementAt], query));
+  const infrastructureMap = byId(infrastructures);
+  const filtered = rows.filter((r) => matchesSearch([r.itemName, r.category, r.unit, r.lastMovementAt, infrastructureMap[r.infrastructureId]?.name], query));
   if (!rows.length) return <div className="empty">No stock movements found.</div>;
   return (
     <>
       {!compact ? <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search stock" /></div> : null}
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Item</th><th>Category</th><th>Received</th><th>Issued</th><th>Balance</th><th>Unit</th><th>Last Movement</th></tr></thead>
-          <tbody>{filtered.map((r) => <tr key={r.itemId}><td><strong>{fmt(r.itemName)}</strong></td><td>{fmt(r.category)}</td><td>{num(r.received)}</td><td>{num(r.issued)}</td><td><strong className={Number(r.balance) <= 0 ? "negative" : "positive"}>{num(r.balance)}</strong></td><td>{fmt(r.unit)}</td><td>{fmt(r.lastMovementAt)}</td></tr>)}</tbody>
+          <thead><tr><th>Item</th>{compact ? null : <th>Location</th>}<th>Category</th><th>Received</th><th>Issued</th><th>Balance</th><th>Unit</th><th>Last Movement</th></tr></thead>
+          <tbody>{filtered.map((r) => <tr key={`${r.infrastructureId || "store"}-${r.itemId}`}><td><strong>{fmt(r.itemName)}</strong></td>{compact ? null : <td>{fmt(infrastructureMap[r.infrastructureId]?.name || "Store")}</td>}<td>{fmt(r.category)}</td><td>{num(r.received)}</td><td>{num(r.issued)}</td><td><strong className={Number(r.balance) <= 0 ? "negative" : "positive"}>{num(r.balance)}</strong></td><td>{fmt(r.unit)}</td><td>{fmt(r.lastMovementAt)}</td></tr>)}</tbody>
         </table>
       </div>
       {!filtered.length ? <div className="empty compact-empty">No matching stock items.</div> : null}
@@ -1081,13 +1292,47 @@ function InventoryTable({ rows, compact = false }) {
   );
 }
 
-function LedgerTable({ rows, compact = false }) {
+function LedgerTable({ rows, compact = false, infrastructures = [] }) {
+  const infrastructureMap = byId(infrastructures);
   if (!rows.length) return <div className="empty">No ledger movements found.</div>;
   return (
     <table>
-      <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Unit</th>{compact ? null : <th>Document</th>}{compact ? null : <th>Remarks</th>}</tr></thead>
-      <tbody>{rows.map((r) => <tr key={r.id}><td>{fmt(r.date)}</td><td>{fmt(r.type)}</td><td>{fmt(r.itemName)}</td><td>{num(r.quantity)}</td><td>{fmt(r.unit)}</td>{compact ? null : <td>{fmt(r.documentNo)}</td>}{compact ? null : <td>{fmt(r.remarks)}</td>}</tr>)}</tbody>
+      <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>Unit</th>{compact ? null : <th>From</th>}{compact ? null : <th>To</th>}{compact ? null : <th>Document</th>}{compact ? null : <th>Duty Person</th>}{compact ? null : <th>Remarks</th>}</tr></thead>
+      <tbody>{rows.map((r) => <tr key={r.id}><td>{fmt(r.date)}</td><td>{fmt(r.type)}</td><td>{fmt(r.itemName)}</td><td>{num(r.quantity)}</td><td>{fmt(r.unit)}</td>{compact ? null : <td>{fmt(infrastructureMap[r.fromInfrastructureId]?.name || (r.fromInfrastructureId ? r.fromInfrastructureId : "Store"))}</td>}{compact ? null : <td>{fmt(infrastructureMap[r.toInfrastructureId]?.name || (r.toInfrastructureId ? r.toInfrastructureId : ""))}</td>}{compact ? null : <td>{fmt(r.documentNo)}</td>}{compact ? null : <td>{fmt(r.dutyPerson || r.createdByName)}</td>}{compact ? null : <td>{fmt(r.remarks)}</td>}</tr>)}</tbody>
     </table>
+  );
+}
+
+function StockEventTable({ events = [], infrastructures = [] }) {
+  const [query, setQuery] = useState("");
+  const infrastructureMap = byId(infrastructures);
+  const rows = events.filter((event) => matchesSearch([event.type, event.itemName, event.dutyPerson, event.documentNo, event.remarks], query));
+  if (!events.length) return <div className="empty">No stock events recorded.</div>;
+  return (
+    <>
+      <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search stock events" /></div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>From</th><th>To</th><th>Duty Person</th><th>Remarks</th></tr></thead>
+          <tbody>{rows.map((event) => <tr key={event.id}><td>{fmt(event.date)}</td><td>{stockEventTypes[event.type] || event.type}</td><td>{fmt(event.itemName)}</td><td>{num(event.quantity)} {fmt(event.unit)}</td><td>{fmt(infrastructureMap[event.fromInfrastructureId]?.name || (event.fromInfrastructureId ? event.fromInfrastructureId : "Store"))}</td><td>{fmt(infrastructureMap[event.toInfrastructureId]?.name || event.toInfrastructureId)}</td><td>{fmt(event.dutyPerson)}</td><td>{fmt(event.remarks)}</td></tr>)}</tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+function FullLedgerTable({ rows = [], infrastructures = [] }) {
+  const [query, setQuery] = useState("");
+  const infrastructureMap = byId(infrastructures);
+  const filtered = rows.filter((row) => matchesSearch([row.date, row.type, row.itemName, row.documentNo, row.dutyPerson, row.remarks, infrastructureMap[row.fromInfrastructureId]?.name, infrastructureMap[row.toInfrastructureId]?.name], query));
+  if (!rows.length) return <div className="empty">No ledger movements found.</div>;
+  return (
+    <>
+      <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search full ledger" /></div>
+      <div className="table-wrap full-ledger-wrap">
+        <LedgerTable rows={filtered} infrastructures={infrastructures} />
+      </div>
+    </>
   );
 }
 
