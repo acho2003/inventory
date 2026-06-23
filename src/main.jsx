@@ -161,23 +161,10 @@ function lineCategory(line = {}) {
   return line.category || line.specification || "";
 }
 
-function amountUsedFor(receipts = [], field, id) {
-  return receipts
-    .filter((receipt) => receipt[field] === id)
-    .reduce((sum, receipt) => sum + (receipt.lines || []).reduce((lineSum, line) => lineSum + Number(line.amount || 0), 0), 0);
-}
-
-function lineAmount(line = {}) {
-  const amount = Number(line.amount || 0);
-  if (amount > 0) return amount;
-  return Number(line.rate || 0) * Number(line.quantity || 0);
-}
-
-function amountCommittedFor(requisitions = [], field, id) {
-  const activeStatuses = new Set(["STORE_VERIFIED", "APPROVED", "ORDERED", "PARTIALLY_RECEIVED"]);
-  return requisitions
-    .filter((requisition) => activeStatuses.has(requisition.status) && requisition[field] === id)
-    .reduce((sum, requisition) => sum + (requisition.lines || []).reduce((lineSum, line) => lineSum + lineAmount(line), 0), 0);
+function amountUsedFor(issues = [], field, id) {
+  return issues
+    .filter((issue) => issue[field] === id)
+    .reduce((sum, issue) => sum + (issue.lines || []).reduce((lineSum, line) => lineSum + Number(line.amount || 0), 0), 0);
 }
 
 function requisitionReceivedQty(receipts = [], requisitionId, itemId) {
@@ -190,15 +177,13 @@ function requisitionReceivedQty(receipts = [], requisitionId, itemId) {
 
 function budgetUsageRows(data) {
   return data.budgetHeads.map((head) => {
-    const used = amountUsedFor(data.receipts, "budgetHeadId", head.id);
-    const committed = amountCommittedFor(data.requisitions, "budgetHeadId", head.id);
+    const used = amountUsedFor(data.issues, "budgetHeadId", head.id);
     const amount = Number(head.amount || 0);
     return {
       id: head.id,
       name: head.name,
       amount,
       status: head.status || "Active",
-      committed,
       used,
       balance: amount - used
     };
@@ -207,17 +192,12 @@ function budgetUsageRows(data) {
 
 function infrastructureUsageRows(data) {
   return data.infrastructures.map((infra) => {
-    const used = amountUsedFor(data.receipts, "infrastructureId", infra.id);
-    const committed = amountCommittedFor(data.requisitions, "infrastructureId", infra.id);
-    const amount = Number(infra.amount || 0);
+    const used = amountUsedFor(data.issues, "infrastructureId", infra.id);
     return {
       id: infra.id,
       name: infra.name,
-      amount,
       status: infra.status || "Active",
-      committed,
-      used,
-      balance: amount - used
+      used
     };
   });
 }
@@ -487,17 +467,11 @@ function Dashboard({ data, user, api, refresh }) {
         <Kpi label="Low / Zero Stock" value={d.inventory.lowStock} />
       </div>
       <WorkflowStrip />
-      <div className="grid two">
-        <div className="panel">
-          <PanelTitle title="Budget Head Chart" subtitle="Committed order value, received/used amount, and remaining balance." />
-          <UsageBarChart rows={budgetRows} emptyText="No budget heads yet." />
-        </div>
-        <div className="panel">
-          <PanelTitle title="Key Infrastructure Chart" subtitle="Committed order value, received/used amount, and remaining balance." />
-          <UsageBarChart rows={infraRows} emptyText="No key infrastructure yet." />
-        </div>
+      <div className="panel">
+        <PanelTitle title="Budget Head Chart" subtitle="Received/used amount and remaining balance for each budget head." />
+        <UsageBarChart rows={budgetRows} emptyText="No budget heads yet." />
       </div>
-      <div className="grid three">
+      <div className="grid two">
         <div className="panel">
           <PanelTitle title="Needs Attention" subtitle="Requests waiting for verification, approval, or order placement." />
           {urgent.length ? <CompactRequestList rows={urgent} /> : <div className="empty compact-empty">No active approvals right now.</div>}
@@ -506,22 +480,15 @@ function Dashboard({ data, user, api, refresh }) {
           <PanelTitle title="Stock Snapshot" subtitle="Top inventory balances from the current ledger." />
           <InventoryTable rows={data.inventory.slice(0, 10)} compact />
         </div>
-        <div className="panel">
-          <PanelTitle title="Budget Heads" subtitle="Available for requisitions and store tracking." />
-          <div className="detail-stack">
-            {data.budgetHeads.slice(0, 8).map((head) => <div className="mini-row" key={head.id}><strong>{head.name}</strong><span>{num(head.amount)}</span></div>)}
-            {!data.budgetHeads.length ? <div className="empty compact-empty">No budget heads yet.</div> : null}
-          </div>
-        </div>
       </div>
       <div className="grid two">
         <div className="panel">
-          <PanelTitle title="Budget Head Usage" subtitle="Budget amount, committed orders, received/used amount, and balance." />
-          <UsageTable rows={budgetRows} emptyText="No budget heads yet." />
+          <PanelTitle title="Budget Head Usage" subtitle="Budget amount, received/used amount, and remaining balance." />
+          <UsageTable rows={budgetRows} variant="budget" emptyText="No budget heads yet." />
         </div>
         <div className="panel">
-          <PanelTitle title="Key Infrastructure Usage" subtitle="Budget amount, committed orders, received/used amount, and balance." />
-          <UsageTable rows={infraRows} emptyText="No key infrastructure yet." />
+          <PanelTitle title="Key Infrastructure Usage" subtitle="Received/used amount tracked through requisitions and stock movements." />
+          <UsageTable rows={infraRows} variant="infrastructure" emptyText="No key infrastructure yet." />
         </div>
       </div>
       {can(user, "admin:crud") ? <AdminCrudPanel data={data} api={api} refresh={refresh} /> : null}
@@ -577,8 +544,8 @@ function AdminCrudPanel({ data, api, refresh }) {
       title: "Key Infrastructures",
       path: "/api/infrastructures",
       rows: data.infrastructures,
-      fields: ["name", "amount", "status"],
-      columns: [["Name", "name"], ["Amount", "amount"], ["Status", "status"]]
+      fields: ["name", "status"],
+      columns: [["Name", "name"], ["Status", "status"]]
     },
     {
       title: "Items",
@@ -650,20 +617,45 @@ function Kpi({ label, value }) {
   return <div className="kpi"><span>{label}</span><strong>{display}</strong></div>;
 }
 
-function UsageTable({ rows, emptyText }) {
+function SegmentedTabs({ tabs, active, onChange }) {
+  return (
+    <div className="segmented-tabs" role="tablist">
+      {tabs.map((tab) => (
+        <button
+          key={tab.id}
+          type="button"
+          className={active === tab.id ? "active" : ""}
+          onClick={() => onChange(tab.id)}
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function UsageTable({ rows, emptyText, variant = "budget" }) {
   if (!rows.length) return <div className="empty compact-empty">{emptyText}</div>;
+  const isBudget = variant === "budget";
   return (
     <div className="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Budget Amount</th><th>Committed</th><th>Used</th><th>Balance</th><th>Status</th></tr></thead>
+        <thead>
+          <tr>
+            <th>{isBudget ? "Budget Head" : "Key Infrastructure"}</th>
+            {isBudget ? <th>Budget Amount</th> : null}
+            <th>Used</th>
+            {isBudget ? <th>Balance</th> : null}
+            <th>Status</th>
+          </tr>
+        </thead>
         <tbody>
           {rows.slice(0, 12).map((row) => (
             <tr key={row.id}>
               <td><strong>{row.name}</strong></td>
-              <td>{num(row.amount)}</td>
-              <td>{num(row.committed)}</td>
+              {isBudget ? <td>{num(row.amount)}</td> : null}
               <td>{num(row.used)}</td>
-              <td><strong className={row.balance < 0 ? "negative" : "positive"}>{num(row.balance)}</strong></td>
+              {isBudget ? <td><strong className={row.balance < 0 ? "negative" : "positive"}>{num(row.balance)}</strong></td> : null}
               <td><span className="status">{row.status}</span></td>
             </tr>
           ))}
@@ -679,27 +671,22 @@ function UsageBarChart({ rows, emptyText }) {
     <div className="usage-chart">
       {rows.slice(0, 10).map((row) => {
         const used = Math.max(0, Number(row.used || 0));
-        const committed = Math.max(0, Number(row.committed || 0));
         const balance = Math.max(0, Number(row.balance || 0));
-        const pending = Math.max(0, committed - used);
-        const total = Math.max(used + pending + balance, Number(row.amount || 0), 1);
+        const total = Math.max(used + balance, Number(row.amount || 0), 1);
         const usedPct = Math.min(100, (used / total) * 100);
-        const pendingPct = Math.min(100 - usedPct, (pending / total) * 100);
-        const balancePct = Math.max(0, 100 - usedPct - pendingPct);
+        const balancePct = Math.max(0, 100 - usedPct);
         return (
           <div className="usage-bar-row" key={row.id}>
             <div className="usage-bar-head">
               <strong>{row.name}</strong>
               <span>{num(row.amount)}</span>
             </div>
-            <div className="stacked-bar" aria-label={`${row.name}: used ${num(used)}, committed ${num(committed)}, balance ${num(balance)}`}>
+            <div className="stacked-bar" aria-label={`${row.name}: used ${num(used)}, balance ${num(balance)}`}>
               <span className="bar-used" style={{ width: `${usedPct}%` }} />
-              <span className="bar-committed" style={{ width: `${pendingPct}%` }} />
               <span className="bar-balance" style={{ width: `${balancePct}%` }} />
             </div>
             <div className="usage-legend">
               <span><i className="legend-used" /> Used {num(used)}</span>
-              <span><i className="legend-committed" /> Pending {num(pending)}</span>
               <span><i className="legend-balance" /> Balance {num(row.balance)}</span>
             </div>
           </div>
@@ -766,10 +753,10 @@ function BudgetHeadSelect({ budgetHeads, value, onChange }) {
   );
 }
 
-function InfrastructureSelect({ infrastructures, value, onChange, budgetHeadId = "", storeOption = false }) {
-  const rows = infrastructures.filter((entry) => !budgetHeadId || entry.budgetHeadId === budgetHeadId);
+function InfrastructureSelect({ infrastructures, value, onChange, storeOption = false, required = false }) {
+  const rows = infrastructures;
   return (
-    <select value={value || ""} onChange={(e) => onChange(e.target.value)}>
+    <select value={value || ""} onChange={(e) => onChange(e.target.value)} required={required}>
       <option value="">{storeOption ? "Store / Not Assigned" : "Select infrastructure"}</option>
       {rows.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
     </select>
@@ -779,12 +766,12 @@ function InfrastructureSelect({ infrastructures, value, onChange, budgetHeadId =
 function ProjectsPage({ user, data, api, refresh }) {
   const [selectedBudgetHeadId, setSelectedBudgetHeadId] = useState(data.budgetHeads[0]?.id || "");
   const [budgetForm, setBudgetForm] = useState({ name: "", amount: "", status: "Active" });
-  const [infraForm, setInfraForm] = useState({ budgetHeadId: "", name: "", amount: "", status: "Active" });
+  const [infraForm, setInfraForm] = useState({ name: "", status: "Active" });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const budgetMap = byId(data.budgetHeads);
   const selectedBudgetHead = budgetMap[selectedBudgetHeadId] || data.budgetHeads[0];
-  const infraRows = data.infrastructures.filter((entry) => entry.budgetHeadId === selectedBudgetHead?.id);
+  const infraRows = data.infrastructures;
   const ordered = data.requisitions.filter((req) => req.budgetHeadId === selectedBudgetHead?.id);
   const ledgerRows = data.ledger.filter((row) => row.budgetHeadId === selectedBudgetHead?.id);
 
@@ -795,7 +782,7 @@ function ProjectsPage({ user, data, api, refresh }) {
 
   async function submitInfra(event) {
     event.preventDefault();
-    await submitEntity("/api/infrastructures", infraForm, () => setInfraForm({ budgetHeadId: "", name: "", amount: "", status: "Active" }), "Infrastructure added.");
+    await submitEntity("/api/infrastructures", infraForm, () => setInfraForm({ name: "", status: "Active" }), "Infrastructure added.");
   }
 
   async function submitEntity(path, body, reset, okMessage) {
@@ -827,9 +814,7 @@ function ProjectsPage({ user, data, api, refresh }) {
           </form>
           <form className="panel grid" onSubmit={submitInfra}>
             <PanelTitle title="Add Key Infrastructure" />
-            <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={infraForm.budgetHeadId} onChange={(budgetHeadId) => setInfraForm({ ...infraForm, budgetHeadId })} /></label>
             <label>Infrastructure Name <input value={infraForm.name} onChange={(e) => setInfraForm({ ...infraForm, name: e.target.value })} required /></label>
-            <label>Amount <input type="number" min="0" step="0.01" value={infraForm.amount} onChange={(e) => setInfraForm({ ...infraForm, amount: e.target.value })} /></label>
             <label>Status <select value={infraForm.status} onChange={(e) => setInfraForm({ ...infraForm, status: e.target.value })}><option>Active</option><option>Pending</option><option>Closed</option></select></label>
             <button className="primary" type="submit">Add infrastructure</button>
           </form>
@@ -852,12 +837,26 @@ function ProjectsPage({ user, data, api, refresh }) {
           </div>
         </div>
         <div className="panel">
-          <PanelTitle title={selectedBudgetHead?.name || "Budget Head Detail"} subtitle="Key infrastructure, ordered items, and issued items." />
-          <div className="detail-stack">
-            <DetailBlock title="Infrastructure Activities" rows={infraRows.map((row) => `${row.name} - ${num(row.amount)} - ${row.status || "Active"}`)} />
-            <DetailBlock title="Ordered Items" rows={ordered.flatMap((req) => (req.lines || []).map((line) => `${req.requisitionNo}: ${line.itemName} (${lineCategory(line) || "No category"}) - ${num(line.quantity)} ${line.unit}`)).slice(0, 12)} />
-            <DetailBlock title="Issued Items" rows={ledgerRows.filter((row) => row.type === "ISSUE").map((row) => `${row.itemName} (${num(row.quantity)} ${row.unit})`).slice(0, 12)} />
+          <PanelTitle title="Key Infrastructures" subtitle="Independent master list. Budget linkage happens when a requisition or stock transaction is created." />
+          <div className="table-wrap">
+            <table>
+              <thead><tr><th>Infrastructure Name</th><th>Status</th></tr></thead>
+              <tbody>{infraRows.map((infra) => (
+                <tr key={infra.id}>
+                  <td><strong>{infra.name}</strong></td>
+                  <td><span className="status">{infra.status || "Active"}</span></td>
+                </tr>
+              ))}</tbody>
+            </table>
           </div>
+          {!infraRows.length ? <div className="empty compact-empty">No key infrastructures yet.</div> : null}
+        </div>
+      </div>
+      <div className="panel">
+        <PanelTitle title={selectedBudgetHead?.name || "Budget Head Detail"} subtitle="Ordered and issued items linked to the selected budget head through transactions." />
+        <div className="detail-stack">
+          <DetailBlock title="Ordered Items" rows={ordered.flatMap((req) => (req.lines || []).map((line) => `${req.requisitionNo}: ${line.itemName} (${lineCategory(line) || "No category"}) - ${num(line.quantity)} ${line.unit}`)).slice(0, 12)} />
+          <DetailBlock title="Issued Items" rows={ledgerRows.filter((row) => row.type === "ISSUE").map((row) => `${row.itemName} (${num(row.quantity)} ${row.unit})`).slice(0, 12)} />
         </div>
       </div>
     </>
@@ -873,7 +872,7 @@ function DetailBlock({ title, rows }) {
   );
 }
 
-function LineEditor({ items, lines, setLines, receipt = false, arrival = false, inventory = [] }) {
+function LineEditor({ items, lines, setLines, receipt = false, arrival = false, inventory = [], costing = false }) {
   function update(index, patch) {
     setLines(lines.map((line, i) => i === index ? { ...line, ...patch } : line));
   }
@@ -881,10 +880,14 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false, 
     const key = String(name || "").trim().toLowerCase();
     return items.find((item) => item.name.toLowerCase() === key);
   }
-  function stockForLine(line) {
+  function stockStatsForLine(line) {
     const item = line.itemId ? items.find((entry) => entry.id === line.itemId) : matchItem(line.itemName);
     if (!item) return null;
-    return inventory.filter((entry) => entry.itemId === item.id && !entry.infrastructureId).reduce((sum, entry) => sum + Number(entry.balance || 0), 0);
+    const rows = inventory.filter((entry) => entry.itemId === item.id);
+    return {
+      store: rows.filter((entry) => !entry.infrastructureId).reduce((sum, entry) => sum + Number(entry.balance || 0), 0),
+      total: rows.reduce((sum, entry) => sum + Number(entry.balance || 0), 0)
+    };
   }
   return (
     <div className="line-section">
@@ -900,7 +903,9 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false, 
       </div>
       <datalist id="itemOptions">{items.map((item) => <option key={item.id} value={item.name} />)}</datalist>
       <div className="line-editor">
-        {lines.map((line, index) => (
+        {lines.map((line, index) => {
+          const stockStats = inventory.length ? stockStatsForLine(line) : null;
+          return (
           <div className={`line-row ${receipt ? "receipt-line" : ""}`} key={index}>
             <label>Item <input list="itemOptions" value={line.itemName} onChange={(e) => {
               const item = matchItem(e.target.value);
@@ -919,16 +924,25 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false, 
               </select>
             </label>
             <label>Qty <input type="number" step="0.01" min="0.01" value={line.quantity} onChange={(e) => update(index, { quantity: e.target.value })} required /></label>
-            <label>Unit <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} />{inventory.length && stockForLine(line) !== null ? <span className="stock-hint">Store stock: {num(stockForLine(line))} {line.unit}</span> : null}</label>
-            {receipt ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => update(index, { rate: e.target.value })} /></label> : null}
-            {receipt ? <label>Amount <input type="number" step="0.01" min="0" value={line.amount || ""} onChange={(e) => update(index, { amount: e.target.value })} /></label> : null}
+            <label className="field-control">
+              <span>Unit</span>
+              <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} />
+            </label>
+            {stockStats ? <div className="stock-hint-cell"><span className="stock-hint">Store stock: {num(stockStats.store)} {line.unit}{stockStats.total !== stockStats.store ? ` | Total stock: ${num(stockStats.total)} ${line.unit}` : ""}</span></div> : null}
+            {receipt || costing ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => {
+              const rate = e.target.value;
+              const quantity = Number(line.quantity || 0);
+              update(index, { rate, amount: quantity && rate !== "" ? String(Number(rate || 0) * quantity) : line.amount });
+            }} /></label> : null}
+            {receipt || costing ? <label>Amount <input type="number" step="0.01" min="0" value={line.amount || ""} onChange={(e) => update(index, { amount: e.target.value })} /></label> : null}
             {arrival ? <label className="check-label">Arrived <input type="checkbox" checked={line.reached !== false} onChange={(e) => update(index, { reached: e.target.checked })} /></label> : null}
             <label>Remarks <input value={line.remarks} onChange={(e) => update(index, { remarks: e.target.value })} /></label>
             <button type="button" className="icon-button" disabled={lines.length === 1} onClick={() => setLines(lines.filter((_, i) => i !== index))} title="Remove item line">
               <Trash2 size={16} />
             </button>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -980,8 +994,8 @@ function Requisitions({ user, data, api, refresh }) {
               <label>Request Date <input type="date" value={form.requestDate} onChange={(e) => setForm({ ...form, requestDate: e.target.value })} /></label>
             </div>
             <div className="grid two">
-              <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
-              <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
+              <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId })} /></label>
+              <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
             </div>
             <label>Purpose <textarea rows="2" value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} /></label>
             <LineEditor items={data.items} lines={lines} setLines={setLines} />
@@ -1135,14 +1149,16 @@ function Approvals({ user, data, api, refresh }) {
         {message ? <div className="success">{message}</div> : null}
         {error ? <div className="error">{error}</div> : null}
         {!rows.length ? <div className="empty">No active approval items.</div> : (
-          <div className="approval-list">{rows.map((r) => <ApprovalRow key={r.id} row={r} user={user} updateStatus={updateStatus} />)}</div>
+          <div className="approval-list">{rows.map((r) => <ApprovalRow key={r.id} row={r} user={user} data={data} updateStatus={updateStatus} />)}</div>
         )}
       </div>
     </>
   );
 }
 
-function ApprovalRow({ row, user, updateStatus }) {
+function ApprovalRow({ row, user, data, updateStatus }) {
+  const budgetHead = data.budgetHeads.find((entry) => entry.id === row.budgetHeadId);
+  const infrastructure = data.infrastructures.find((entry) => entry.id === row.infrastructureId);
   return (
     <div className="approval-card">
       <div className="approval-main">
@@ -1151,6 +1167,10 @@ function ApprovalRow({ row, user, updateStatus }) {
           <span>{fmt(row.purpose)}</span>
         </div>
         <span className={`status ${row.status}`}>{statusLabels[row.status] || row.status}</span>
+      </div>
+      <div className="approval-meta">
+        <span><strong>Budget Head</strong>{fmt(budgetHead?.name || row.budgetHeadId)}</span>
+        <span><strong>Key Infrastructure</strong>{fmt(infrastructure?.name || row.infrastructureId)}</span>
       </div>
       {row.status === "REJECTED" && row.rejectionReason ? <div className="rejection-note">Rejected: {row.rejectionReason}</div> : null}
       <ApprovalTimeline row={row} />
@@ -1211,6 +1231,8 @@ function ReceiveStock({ data, api, refresh, setView }) {
   const [lines, setLines] = useState([blankLine()]);
   const [error, setError] = useState("");
   const approved = data.requisitions.filter((r) => ["APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(r.status));
+  const budgetMap = byId(data.budgetHeads);
+  const infrastructureMap = byId(data.infrastructures);
 
   async function submit(event) {
     event.preventDefault();
@@ -1252,16 +1274,18 @@ function ReceiveStock({ data, api, refresh, setView }) {
     <>
       <Header title="Receive Stock" eyebrow="Stock arrival" subtitle="Document numbers are captured here after approved stock reaches the store." />
       <form className="panel grid" onSubmit={submit}>
-        <PanelTitle title="Receipt Details" subtitle="Use this screen only after the order has reached the store or site." />
+        <PanelTitle title="Receipt Details" subtitle="Use this screen only after the order has reached the store. Received stock is placed into Store first." />
         {error ? <div className="error">{error}</div> : null}
         <div className="grid four">
           <label>Linked Requisition <select value={form.requisitionId} onChange={(e) => selectRequisition(e.target.value)}><option value="">No linked requisition</option>{approved.map((r) => <option key={r.id} value={r.id}>{r.requisitionNo} - {statusLabels[r.status]}</option>)}</select></label>
           <label>Receipt Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
           <label>Supplier / Party <input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></label>
         </div>
-        <div className="grid two">
-          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
-          <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
+        <div className="workflow-note">
+          <strong>Receipt goes to Store</strong>
+          <span>Requested Budget Head: {fmt(budgetMap[form.budgetHeadId]?.name || form.budgetHeadId)}</span>
+          <span>Requested Key Infrastructure: {fmt(infrastructureMap[form.infrastructureId]?.name || form.infrastructureId)}</span>
+          <span>Assign stock to a budget head and key infrastructure from the Issue Stock screen.</span>
         </div>
         <div className="document-band">
           <PanelTitle title="Arrival Documents" subtitle="Record these only after approved stock reaches the store or site." />
@@ -1285,7 +1309,8 @@ function ReceiveStock({ data, api, refresh, setView }) {
   );
 }
 
-function Inventory({ data, api, refresh, user }) {
+function Inventory({ data }) {
+  const [activeTab, setActiveTab] = useState("summary");
   const [traceItemId, setTraceItemId] = useState("");
   const infrastructureMap = byId(data.infrastructures);
   const groups = [];
@@ -1297,46 +1322,91 @@ function Inventory({ data, api, refresh, user }) {
   const unassignedLedger = data.ledger.filter((row) => !row.infrastructureId || !infrastructureMap[row.infrastructureId]);
   const unassignedStock = summarizeLedger(unassignedLedger);
   const activeGroups = groups.filter((group) => group.stock.length || group.ledger.length);
-  async function submitStockEvent(body) {
-    await api("/api/stock-events", { method: "POST", body: JSON.stringify(body) });
-    await refresh("inventory");
-  }
   return (
     <>
-      <Header title="Inventory" eyebrow="Stock control" subtitle="Transfer stock, track condition events, and inspect complete ledger history." />
-      {can(user, "stock:event") ? (
-        <StockEventForm data={data} onSubmit={submitStockEvent} />
+      <Header title="Inventory" eyebrow="Stock tracking" subtitle="Read-only stock summary, key infrastructure balances, item trace, and complete ledger history." />
+      <SegmentedTabs
+        active={activeTab}
+        onChange={setActiveTab}
+        tabs={[
+          { id: "summary", label: "All Stock Summary" },
+          { id: "infrastructure", label: "Key Infrastructure Stock" },
+          { id: "ledger", label: "Stock Ledger / Item Trace" }
+        ]}
+      />
+      {activeTab === "summary" ? (
+        <div className="panel">
+          <PanelTitle title="All Stock Summary" subtitle="Complete stock balance across store and infrastructure movements." />
+          <InventoryTable rows={data.inventory} infrastructures={data.infrastructures} />
+        </div>
       ) : null}
-      <div className="panel">
-        <PanelTitle title="All Stock Summary" subtitle="Complete stock balance across store and infrastructure movements." />
-        <InventoryTable rows={data.inventory} infrastructures={data.infrastructures} />
-      </div>
-      <ItemTracePanel data={data} traceItemId={traceItemId} setTraceItemId={setTraceItemId} />
-      <div className="inventory-groups">
-        {activeGroups.map((group) => <InfrastructureInventorySection key={group.id} group={group} />)}
-        {unassignedStock.length || unassignedLedger.length ? (
-          <InfrastructureInventorySection group={{ id: "store", name: "Store / Not Assigned to Infrastructure", status: "Store", ledger: unassignedLedger, stock: unassignedStock }} />
-        ) : null}
-        {!activeGroups.length && !unassignedStock.length ? (
-          <div className="panel"><div className="empty">No infrastructure stock movements found.</div></div>
-        ) : null}
-      </div>
-      <div className="grid two">
-        <div className="panel">
-          <PanelTitle title="Stock Event History" subtitle="Transfers, disposal, spoilage, and repair records." />
-          <StockEventTable events={data.stockEvents} infrastructures={data.infrastructures} />
+      {activeTab === "infrastructure" ? (
+        <div className="inventory-groups">
+          {activeGroups.map((group) => <InfrastructureInventorySection key={group.id} group={group} />)}
+          {unassignedStock.length || unassignedLedger.length ? (
+            <InfrastructureInventorySection group={{ id: "store", name: "Store / Not Assigned to Infrastructure", status: "Store", ledger: unassignedLedger, stock: unassignedStock }} />
+          ) : null}
+          {!activeGroups.length && !unassignedStock.length ? (
+            <div className="panel"><div className="empty">No infrastructure stock movements found.</div></div>
+          ) : null}
         </div>
-        <div className="panel">
-          <PanelTitle title="Full Ledger History" subtitle="Every receipt, issue, transfer, disposal, spoilage, and repair movement." />
-          <FullLedgerTable rows={data.ledger} infrastructures={data.infrastructures} />
-        </div>
-      </div>
+      ) : null}
+      {activeTab === "ledger" ? (
+        <InventoryLedgerTab
+          data={data}
+          traceItemId={traceItemId}
+          setTraceItemId={setTraceItemId}
+        />
+      ) : null}
     </>
+  );
+}
+
+function receiptForLedger(row, receiptMap = {}) {
+  return row.referenceType === "receipt" ? receiptMap[row.referenceId] : null;
+}
+
+function ledgerDocumentFields(row, receiptMap = {}) {
+  const receipt = receiptForLedger(row, receiptMap);
+  return {
+    challanNo: receipt?.challanNo || "",
+    dvNo: receipt?.dvNo || "",
+    billNo: receipt?.billNo || "",
+    documentNo: row.documentNo || receipt?.challanNo || ""
+  };
+}
+
+function InventoryLedgerTab({ data, traceItemId, setTraceItemId }) {
+  const transferEvents = data.stockEvents.filter((event) => event.type === "TRANSFER");
+  const conditionEvents = data.stockEvents.filter((event) => ["RETURNED_FROM_REPAIR", "REPAIR_NOTE", "DISPOSED", "SPOILED"].includes(event.type));
+  return (
+    <div className="inventory-ledger-stack">
+      <ItemTracePanel data={data} traceItemId={traceItemId} setTraceItemId={setTraceItemId} />
+      <div className="panel">
+        <PanelTitle title="Full Stock Ledger" subtitle="Every receipt, issue, transfer, return, repair, disposal, and spoilage movement." />
+        <FullLedgerTable rows={data.ledger} infrastructures={data.infrastructures} receipts={data.receipts} />
+      </div>
+      <div className="ledger-history-grid">
+        <div className="panel">
+          <PanelTitle title="Issue History" subtitle="Issued stock movements kept for audit and traceability." />
+          <IssueHistoryTable issues={data.issues} />
+        </div>
+        <div className="panel">
+          <PanelTitle title="Transfer History" subtitle="Infrastructure-to-infrastructure transfer records." />
+          <StockEventTable events={transferEvents} infrastructures={data.infrastructures} emptyText="No transfer records." />
+        </div>
+      </div>
+      <div className="panel">
+        <PanelTitle title="Return / Condition History" subtitle="Returned from repair, repair notes, disposed, and spoiled stock records." />
+        <StockEventTable events={conditionEvents} infrastructures={data.infrastructures} emptyText="No return or condition records." />
+      </div>
+    </div>
   );
 }
 
 function ItemTracePanel({ data, traceItemId, setTraceItemId }) {
   const infrastructureMap = byId(data.infrastructures);
+  const receiptMap = byId(data.receipts);
   const rows = data.ledger
     .filter((row) => !traceItemId || row.itemId === traceItemId)
     .slice()
@@ -1352,21 +1422,27 @@ function ItemTracePanel({ data, traceItemId, setTraceItemId }) {
       </div>
       <div className="table-wrap full-ledger-wrap">
         <table>
-          <thead><tr><th>Date</th><th>Lifecycle</th><th>Type</th><th>Item</th><th>Qty</th><th>From</th><th>To / Location</th><th>Document</th><th>Duty Person</th><th>Remarks</th></tr></thead>
-          <tbody>{rows.map((row) => (
-            <tr key={row.id}>
-              <td>{fmt(row.date)}</td>
-              <td><span className="status">{fmt(row.lifecycleStatus)}</span></td>
-              <td>{fmt(row.type)}</td>
-              <td><strong>{fmt(row.itemName)}</strong></td>
-              <td>{num(row.quantity)} {fmt(row.unit)}</td>
-              <td>{fmt(infrastructureMap[row.fromInfrastructureId]?.name || (row.fromInfrastructureId ? row.fromInfrastructureId : "Store"))}</td>
-              <td>{fmt(infrastructureMap[row.toInfrastructureId]?.name || infrastructureMap[row.infrastructureId]?.name || (row.toInfrastructureId ? row.toInfrastructureId : "Store"))}</td>
-              <td>{fmt(row.documentNo)}</td>
-              <td>{fmt(row.dutyPerson || row.createdByName)}</td>
-              <td>{fmt(row.remarks)}</td>
-            </tr>
-          ))}</tbody>
+          <thead><tr><th>Date</th><th>Lifecycle</th><th>Type</th><th>Item</th><th>Qty</th><th>From</th><th>To / Location</th><th>Challan No</th><th>DV No</th><th>Bill No</th><th>Document</th><th>Duty Person</th><th>Remarks</th></tr></thead>
+          <tbody>{rows.map((row) => {
+            const docs = ledgerDocumentFields(row, receiptMap);
+            return (
+              <tr key={row.id}>
+                <td>{fmt(row.date)}</td>
+                <td><span className="status">{fmt(row.lifecycleStatus)}</span></td>
+                <td>{fmt(row.type)}</td>
+                <td><strong>{fmt(row.itemName)}</strong></td>
+                <td>{num(row.quantity)} {fmt(row.unit)}</td>
+                <td>{fmt(infrastructureMap[row.fromInfrastructureId]?.name || (row.fromInfrastructureId ? row.fromInfrastructureId : "Store"))}</td>
+                <td>{fmt(infrastructureMap[row.toInfrastructureId]?.name || infrastructureMap[row.infrastructureId]?.name || (row.toInfrastructureId ? row.toInfrastructureId : "Store"))}</td>
+                <td>{fmt(docs.challanNo)}</td>
+                <td>{fmt(docs.dvNo)}</td>
+                <td>{fmt(docs.billNo)}</td>
+                <td>{fmt(docs.documentNo)}</td>
+                <td>{fmt(row.dutyPerson || row.createdByName)}</td>
+                <td>{fmt(row.remarks)}</td>
+              </tr>
+            );
+          })}</tbody>
         </table>
       </div>
       {!rows.length ? <div className="empty compact-empty">No lifecycle movements found.</div> : null}
@@ -1374,8 +1450,9 @@ function ItemTracePanel({ data, traceItemId, setTraceItemId }) {
   );
 }
 
-function StockEventForm({ data, onSubmit }) {
-  const [form, setForm] = useState({ type: "TRANSFER", date: today(), itemId: "", quantity: "", unit: "", fromInfrastructureId: "", toInfrastructureId: "", dutyPerson: "", documentNo: "", remarks: "" });
+function StockEventForm({ data, onSubmit, title = "Stock Event", subtitle = "Record a stock movement or condition change.", types = Object.keys(stockEventTypes), showTypeSelect = true, submitLabel = "Record stock event" }) {
+  const defaultType = types[0] || "TRANSFER";
+  const [form, setForm] = useState({ type: defaultType, date: today(), itemId: "", quantity: "", unit: "", fromInfrastructureId: "", toInfrastructureId: "", dutyPerson: "", documentNo: "", remarks: "" });
   const [error, setError] = useState("");
   const selectedItem = data.items.find((item) => item.id === form.itemId);
   const needsTo = ["TRANSFER", "RETURNED_FROM_REPAIR"].includes(form.type);
@@ -1387,7 +1464,7 @@ function StockEventForm({ data, onSubmit }) {
     setError("");
     try {
       await onSubmit({ ...form, unit: form.unit || selectedItem?.unit || "" });
-      setForm({ type: "TRANSFER", date: today(), itemId: "", quantity: "", unit: "", fromInfrastructureId: "", toInfrastructureId: "", dutyPerson: "", documentNo: "", remarks: "" });
+      setForm({ type: defaultType, date: today(), itemId: "", quantity: "", unit: "", fromInfrastructureId: "", toInfrastructureId: "", dutyPerson: "", documentNo: "", remarks: "" });
     } catch (err) {
       setError(err.message);
     }
@@ -1395,10 +1472,10 @@ function StockEventForm({ data, onSubmit }) {
 
   return (
     <form className="panel grid" onSubmit={submit}>
-      <PanelTitle title="Transfer / Condition Event" subtitle="Move stock between infrastructures or record disposed, spoiled, repair, and returned-from-repair events." />
+      <PanelTitle title={title} subtitle={subtitle} />
       {error ? <div className="error">{error}</div> : null}
       <div className="grid four">
-        <label>Event Type <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>{Object.entries(stockEventTypes).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+        {showTypeSelect ? <label>Event Type <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>{types.map((key) => <option key={key} value={key}>{stockEventTypes[key] || key}</option>)}</select></label> : <div className="readonly-field"><span>Event Type</span><strong>{stockEventTypes[form.type] || form.type}</strong></div>}
         <label>Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
         <label>Item <select value={form.itemId} onChange={(e) => {
           const item = data.items.find((entry) => entry.id === e.target.value);
@@ -1408,15 +1485,15 @@ function StockEventForm({ data, onSubmit }) {
       </div>
       <div className="grid four">
         <label>Unit <input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder={selectedItem?.unit || ""} /></label>
-        {needsFrom ? <label>From <InfrastructureSelect infrastructures={data.infrastructures} value={form.fromInfrastructureId} onChange={(fromInfrastructureId) => setForm({ ...form, fromInfrastructureId })} storeOption /></label> : <div />}
-        {needsTo ? <label>To <InfrastructureSelect infrastructures={data.infrastructures} value={form.toInfrastructureId} onChange={(toInfrastructureId) => setForm({ ...form, toInfrastructureId })} storeOption /></label> : <div />}
+        {needsFrom ? <label>From <InfrastructureSelect infrastructures={data.infrastructures} value={form.fromInfrastructureId} onChange={(fromInfrastructureId) => setForm({ ...form, fromInfrastructureId })} storeOption={form.type !== "TRANSFER"} required={form.type === "TRANSFER"} /></label> : <div />}
+        {needsTo ? <label>To <InfrastructureSelect infrastructures={data.infrastructures} value={form.toInfrastructureId} onChange={(toInfrastructureId) => setForm({ ...form, toInfrastructureId })} storeOption={form.type !== "TRANSFER"} required={form.type === "TRANSFER"} /></label> : <div />}
         <label>Document / Reference <input value={form.documentNo} onChange={(e) => setForm({ ...form, documentNo: e.target.value })} /></label>
       </div>
       <div className="grid two">
         <label>Duty Personnel <input value={form.dutyPerson} onChange={(e) => setForm({ ...form, dutyPerson: e.target.value })} /></label>
         <label>Remarks <input value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
       </div>
-      <button className="primary" type="submit">Record stock event</button>
+      <button className="primary" type="submit">{submitLabel}</button>
     </form>
   );
 }
@@ -1463,51 +1540,173 @@ function InventoryTable({ rows, compact = false, infrastructures = [] }) {
   );
 }
 
-function LedgerTable({ rows, compact = false, infrastructures = [] }) {
+function LedgerTable({ rows, compact = false, infrastructures = [], receipts = [] }) {
   const infrastructureMap = byId(infrastructures);
+  const receiptMap = byId(receipts);
   if (!rows.length) return <div className="empty">No ledger movements found.</div>;
   return (
     <table>
-      <thead><tr><th>Date</th><th>Type</th>{compact ? null : <th>Lifecycle</th>}<th>Item</th><th>Qty</th><th>Unit</th>{compact ? null : <th>From</th>}{compact ? null : <th>To</th>}{compact ? null : <th>Document</th>}{compact ? null : <th>Duty Person</th>}{compact ? null : <th>Remarks</th>}</tr></thead>
-      <tbody>{rows.map((r) => <tr key={r.id}><td>{fmt(r.date)}</td><td>{fmt(r.type)}</td>{compact ? null : <td><span className="status">{fmt(r.lifecycleStatus)}</span></td>}<td>{fmt(r.itemName)}</td><td>{num(r.quantity)}</td><td>{fmt(r.unit)}</td>{compact ? null : <td>{fmt(infrastructureMap[r.fromInfrastructureId]?.name || (r.fromInfrastructureId ? r.fromInfrastructureId : "Store"))}</td>}{compact ? null : <td>{fmt(infrastructureMap[r.toInfrastructureId]?.name || (r.toInfrastructureId ? r.toInfrastructureId : ""))}</td>}{compact ? null : <td>{fmt(r.documentNo)}</td>}{compact ? null : <td>{fmt(r.dutyPerson || r.createdByName)}</td>}{compact ? null : <td>{fmt(r.remarks)}</td>}</tr>)}</tbody>
+      <thead><tr><th>Date</th><th>Type</th>{compact ? null : <th>Lifecycle</th>}<th>Item</th><th>Qty</th><th>Unit</th>{compact ? null : <th>From</th>}{compact ? null : <th>To</th>}{compact ? null : <th>Challan No</th>}{compact ? null : <th>DV No</th>}{compact ? null : <th>Bill No</th>}{compact ? null : <th>Document</th>}{compact ? null : <th>Duty Person</th>}{compact ? null : <th>Remarks</th>}</tr></thead>
+      <tbody>{rows.map((r) => {
+        const docs = ledgerDocumentFields(r, receiptMap);
+        return (
+          <tr key={r.id}>
+            <td>{fmt(r.date)}</td>
+            <td>{fmt(r.type)}</td>
+            {compact ? null : <td><span className="status">{fmt(r.lifecycleStatus)}</span></td>}
+            <td>{fmt(r.itemName)}</td>
+            <td>{num(r.quantity)}</td>
+            <td>{fmt(r.unit)}</td>
+            {compact ? null : <td>{fmt(infrastructureMap[r.fromInfrastructureId]?.name || (r.fromInfrastructureId ? r.fromInfrastructureId : "Store"))}</td>}
+            {compact ? null : <td>{fmt(infrastructureMap[r.toInfrastructureId]?.name || (r.toInfrastructureId ? r.toInfrastructureId : ""))}</td>}
+            {compact ? null : <td>{fmt(docs.challanNo)}</td>}
+            {compact ? null : <td>{fmt(docs.dvNo)}</td>}
+            {compact ? null : <td>{fmt(docs.billNo)}</td>}
+            {compact ? null : <td>{fmt(docs.documentNo)}</td>}
+            {compact ? null : <td>{fmt(r.dutyPerson || r.createdByName)}</td>}
+            {compact ? null : <td>{fmt(r.remarks)}</td>}
+          </tr>
+        );
+      })}</tbody>
     </table>
   );
 }
 
-function StockEventTable({ events = [], infrastructures = [] }) {
+function StockEventTable({ events = [], infrastructures = [], emptyText = "No stock events recorded." }) {
   const [query, setQuery] = useState("");
   const infrastructureMap = byId(infrastructures);
   const rows = events.filter((event) => matchesSearch([event.type, event.itemName, event.dutyPerson, event.documentNo, event.remarks], query));
-  if (!events.length) return <div className="empty">No stock events recorded.</div>;
+  if (!events.length) return <div className="empty">{emptyText}</div>;
   return (
     <>
       <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search stock events" /></div>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>From</th><th>To</th><th>Duty Person</th><th>Remarks</th></tr></thead>
-          <tbody>{rows.map((event) => <tr key={event.id}><td>{fmt(event.date)}</td><td>{stockEventTypes[event.type] || event.type}</td><td>{fmt(event.itemName)}</td><td>{num(event.quantity)} {fmt(event.unit)}</td><td>{fmt(infrastructureMap[event.fromInfrastructureId]?.name || (event.fromInfrastructureId ? event.fromInfrastructureId : "Store"))}</td><td>{fmt(infrastructureMap[event.toInfrastructureId]?.name || event.toInfrastructureId)}</td><td>{fmt(event.dutyPerson)}</td><td>{fmt(event.remarks)}</td></tr>)}</tbody>
+          <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Qty</th><th>From</th><th>To</th><th>Document</th><th>Duty Person</th><th>Remarks</th></tr></thead>
+          <tbody>{rows.map((event) => <tr key={event.id}><td>{fmt(event.date)}</td><td>{stockEventTypes[event.type] || event.type}</td><td>{fmt(event.itemName)}</td><td>{num(event.quantity)} {fmt(event.unit)}</td><td>{fmt(infrastructureMap[event.fromInfrastructureId]?.name || (event.fromInfrastructureId ? event.fromInfrastructureId : "Store"))}</td><td>{fmt(infrastructureMap[event.toInfrastructureId]?.name || event.toInfrastructureId)}</td><td>{fmt(event.documentNo)}</td><td>{fmt(event.dutyPerson)}</td><td>{fmt(event.remarks)}</td></tr>)}</tbody>
         </table>
       </div>
+      {!rows.length ? <div className="empty compact-empty">No matching stock events.</div> : null}
     </>
   );
 }
 
-function FullLedgerTable({ rows = [], infrastructures = [] }) {
+function IssueHistoryTable({ issues = [] }) {
+  const [query, setQuery] = useState("");
+  const rows = issues.filter((issue) => matchesSearch([issue.date, issue.issueChallanNo, issue.issuedTo, issue.remarks, ...(issue.lines || []).map((line) => line.itemName)], query));
+  if (!issues.length) return <div className="empty">No issue history recorded.</div>;
+  return (
+    <>
+      <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search issue history" /></div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Issue Challan</th><th>Duty Person</th><th>Items</th><th>Remarks</th></tr></thead>
+          <tbody>{rows.map((issue) => (
+            <tr key={issue.id}>
+              <td>{fmt(issue.date)}</td>
+              <td>{fmt(issue.issueChallanNo)}</td>
+              <td>{fmt(issue.issuedTo)}</td>
+              <td>{(issue.lines || []).map((line) => <div key={line.id || `${line.itemName}-${line.quantity}`}>{fmt(line.itemName)} ({num(line.quantity)} {fmt(line.unit)})</div>)}</td>
+              <td>{fmt(issue.remarks)}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      {!rows.length ? <div className="empty compact-empty">No matching issue records.</div> : null}
+    </>
+  );
+}
+
+function FullLedgerTable({ rows = [], infrastructures = [], receipts = [] }) {
   const [query, setQuery] = useState("");
   const infrastructureMap = byId(infrastructures);
-  const filtered = rows.filter((row) => matchesSearch([row.date, row.type, row.itemName, row.documentNo, row.dutyPerson, row.remarks, infrastructureMap[row.fromInfrastructureId]?.name, infrastructureMap[row.toInfrastructureId]?.name], query));
+  const receiptMap = byId(receipts);
+  const filtered = rows.filter((row) => {
+    const docs = ledgerDocumentFields(row, receiptMap);
+    return matchesSearch([row.date, row.type, row.itemName, docs.documentNo, docs.challanNo, docs.dvNo, docs.billNo, row.dutyPerson, row.remarks, infrastructureMap[row.fromInfrastructureId]?.name, infrastructureMap[row.toInfrastructureId]?.name], query);
+  });
   if (!rows.length) return <div className="empty">No ledger movements found.</div>;
   return (
     <>
       <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search full ledger" /></div>
       <div className="table-wrap full-ledger-wrap">
-        <LedgerTable rows={filtered} infrastructures={infrastructures} />
+        <LedgerTable rows={filtered} infrastructures={infrastructures} receipts={receipts} />
       </div>
+      {!filtered.length ? <div className="empty compact-empty">No matching ledger movements.</div> : null}
     </>
   );
 }
 
 function IssueStock({ data, api, refresh, setView }) {
+  const [activeTab, setActiveTab] = useState("issue");
+
+  async function submitStockEvent(body) {
+    await api("/api/stock-events", { method: "POST", body: JSON.stringify(body) });
+    await refresh("issue");
+  }
+
+  const transferEvents = data.stockEvents.filter((event) => event.type === "TRANSFER");
+  const conditionEvents = data.stockEvents.filter((event) => ["RETURNED_FROM_REPAIR", "REPAIR_NOTE", "DISPOSED", "SPOILED"].includes(event.type));
+
+  return (
+    <>
+      <Header title="Issue Stock" eyebrow="Material release" subtitle="Issue stock, transfer between infrastructures, and record return or condition changes." />
+      <SegmentedTabs
+        active={activeTab}
+        onChange={setActiveTab}
+        tabs={[
+          { id: "issue", label: "Issue Stock" },
+          { id: "transfer", label: "Transfer Stock" },
+          { id: "condition", label: "Return / Condition" }
+        ]}
+      />
+      {activeTab === "issue" ? (
+        <>
+          <IssueStockForm data={data} api={api} refresh={refresh} setView={setView} />
+          <div className="panel">
+            <PanelTitle title="Issue History" subtitle="Issued stock records for audit and follow-up." />
+            <IssueHistoryTable issues={data.issues} />
+          </div>
+        </>
+      ) : null}
+      {activeTab === "transfer" ? (
+        <>
+          <StockEventForm
+            data={data}
+            onSubmit={submitStockEvent}
+            title="Transfer Stock"
+            subtitle="Move available stock from one infrastructure or store location to another infrastructure."
+            types={["TRANSFER"]}
+            showTypeSelect={false}
+            submitLabel="Record transfer"
+          />
+          <div className="panel">
+            <PanelTitle title="Transfer History" subtitle="Infrastructure-to-infrastructure transfer audit records." />
+            <StockEventTable events={transferEvents} infrastructures={data.infrastructures} emptyText="No transfer records." />
+          </div>
+        </>
+      ) : null}
+      {activeTab === "condition" ? (
+        <>
+          <StockEventForm
+            data={data}
+            onSubmit={submitStockEvent}
+            title="Return / Condition"
+            subtitle="Record returned-from-repair stock, repair notes, disposed stock, and spoiled stock."
+            types={["RETURNED_FROM_REPAIR", "REPAIR_NOTE", "DISPOSED", "SPOILED"]}
+            submitLabel="Record condition event"
+          />
+          <div className="panel">
+            <PanelTitle title="Return / Condition History" subtitle="Returned, repair, disposed, and spoiled records for audit." />
+            <StockEventTable events={conditionEvents} infrastructures={data.infrastructures} emptyText="No return or condition records." />
+          </div>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function IssueStockForm({ data, api, refresh, setView }) {
   const [form, setForm] = useState({ date: today(), budgetHeadId: "", infrastructureId: "", issueChallanNo: "", issuedTo: "", remarks: "" });
   const [lines, setLines] = useState([blankLine()]);
   const [error, setError] = useState("");
@@ -1525,29 +1724,26 @@ function IssueStock({ data, api, refresh, setView }) {
   }
 
   return (
-    <>
-      <Header title="Issue Stock" eyebrow="Material release" subtitle="Issued quantities reduce stock and appear immediately in the ledger." />
-      <form className="panel grid" onSubmit={submit}>
-        <PanelTitle title="Issue Details" subtitle="Issue available stock to a key infrastructure and duty personnel." />
-        {error ? <div className="error">{error}</div> : null}
-        <div className="grid four">
-          <label>Issue Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
-          <label>Issue Challan No <input value={form.issueChallanNo} onChange={(e) => setForm({ ...form, issueChallanNo: e.target.value })} /></label>
-          <label>Duty Personnel / Issued To <input value={form.issuedTo} onChange={(e) => setForm({ ...form, issuedTo: e.target.value })} required /></label>
-        </div>
-        <div className="grid two">
-          <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId, infrastructureId: "" })} /></label>
-          <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} budgetHeadId={form.budgetHeadId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
-        </div>
-        <div className="workflow-note">
-          <strong>Issue preview</strong>
-          <span>Stock will reduce from Store and be traced to the selected key infrastructure and duty personnel.</span>
-        </div>
-        <LineEditor items={data.items} lines={lines} setLines={setLines} inventory={data.inventory} />
-        <label>Remarks <textarea rows="2" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
-        <button className="primary" type="submit">Issue stock</button>
-      </form>
-    </>
+    <form className="panel grid" onSubmit={submit}>
+      <PanelTitle title="Issue Details" subtitle="Issue available stock to a key infrastructure and duty personnel." />
+      {error ? <div className="error">{error}</div> : null}
+      <div className="grid four">
+        <label>Issue Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
+        <label>Issue Challan No <input value={form.issueChallanNo} onChange={(e) => setForm({ ...form, issueChallanNo: e.target.value })} /></label>
+        <label>Duty Personnel / Issued To <input value={form.issuedTo} onChange={(e) => setForm({ ...form, issuedTo: e.target.value })} required /></label>
+      </div>
+      <div className="grid two">
+        <label>Budget Head <BudgetHeadSelect budgetHeads={data.budgetHeads} value={form.budgetHeadId} onChange={(budgetHeadId) => setForm({ ...form, budgetHeadId })} /></label>
+        <label>Key Infrastructure <InfrastructureSelect infrastructures={data.infrastructures} value={form.infrastructureId} onChange={(infrastructureId) => setForm({ ...form, infrastructureId })} /></label>
+      </div>
+      <div className="workflow-note">
+        <strong>Issue preview</strong>
+        <span>Stock will reduce from Store, charge the selected budget head by the item amount, and be traced to the selected key infrastructure and duty personnel.</span>
+      </div>
+      <LineEditor items={data.items} lines={lines} setLines={setLines} inventory={data.inventory} costing />
+      <label>Remarks <textarea rows="2" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
+      <button className="primary" type="submit">Issue stock</button>
+    </form>
   );
 }
 

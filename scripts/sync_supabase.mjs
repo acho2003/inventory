@@ -93,7 +93,10 @@ function recordsForSync(collection) {
     id: String(record.id),
     data: record,
     updated_at: new Date().toISOString()
-  }));
+  })).reduce((rows, row) => {
+    rows.set(`${row.collection}:${row.id}`, row);
+    return rows;
+  }, new Map()).values();
 }
 
 await checked("upsert app state", supabase.from("app_state").upsert({
@@ -104,7 +107,7 @@ await checked("upsert app state", supabase.from("app_state").upsert({
 
 for (const collection of collections) {
   await checked(`clear ${collection}`, supabase.from("app_records").delete().eq("collection", collection));
-  const records = recordsForSync(collection);
+  const records = [...recordsForSync(collection)];
   for (let index = 0; index < records.length; index += 500) {
     const rows = records.slice(index, index + 500);
     if (rows.length) await checked(`sync ${collection}`, supabase.from("app_records").upsert(rows, { onConflict: "collection,id" }));

@@ -44,11 +44,15 @@ function supabaseSetupMessage(error) {
 
 const rolePermissions = {
   requester: [
+    "dashboard:read",
     "requisition:create",
     "requisition:read",
     "budget:read",
     "infrastructure:read",
-    "item:read"
+    "item:read",
+    "inventory:read",
+    "ledger:read",
+    "stock:event:read"
   ],
   store: [
     "dashboard:read",
@@ -191,7 +195,6 @@ function normalizeStore(store) {
   }
   for (const infrastructure of store.infrastructures) {
     infrastructure.status ||= "Active";
-    infrastructure.amount = Number(infrastructure.amount || 0);
   }
   if (!store.budgetHeads.length && store.projects.length) {
     store.budgetHeads = store.projects.map((project) => ({
@@ -279,6 +282,29 @@ async function readLoginUsers() {
   return users;
 }
 
+function recordsForSupabaseSync(store, collection) {
+  const usedIds = new Set();
+  const records = store[collection] || [];
+
+  return records.map((record, index) => {
+    let id = record?.id === undefined || record?.id === null || record?.id === "" ? `${collection}-${index + 1}` : String(record.id);
+
+    if (usedIds.has(id)) {
+      let suffix = 2;
+      while (usedIds.has(`${id}-${suffix}`)) suffix += 1;
+      id = `${id}-${suffix}`;
+    }
+
+    usedIds.add(id);
+    return { ...record, id };
+  }).map((record) => ({
+    collection,
+    id: String(record.id),
+    data: record,
+    updated_at: new Date().toISOString()
+  }));
+}
+
 async function writeSupabaseStore(store) {
   const state = {
     id: "main",
@@ -292,12 +318,7 @@ async function writeSupabaseStore(store) {
   if (stateResult.error) throw stateResult.error;
 
   for (const collection of collections) {
-    const rows = (store[collection] || []).map((record) => ({
-      collection,
-      id: String(record.id),
-      data: record,
-      updated_at: new Date().toISOString()
-    }));
+    const rows = recordsForSupabaseSync(store, collection);
     if (!rows.length) continue;
     const result = await supabase.from("app_records").upsert(rows, { onConflict: "collection,id" });
     if (result.error) throw result.error;
@@ -914,16 +935,10 @@ async function routeApi(req, res, pathname) {
     if (!hasPermission(user, "infrastructure:create")) return sendError(res, 403, "Only the final approver can add infrastructure.");
     const body = await readBody(req);
     const name = normalizeText(body.name);
-    const budgetHeadId = normalizeText(body.budgetHeadId);
     if (!name) return sendError(res, 400, "Infrastructure name is required.");
-    if (!budgetHeadId) return sendError(res, 400, "Budget head is required.");
-    const budgetHead = store.budgetHeads.find((entry) => entry.id === budgetHeadId);
     const infrastructure = {
       id: nextId(store, "infrastructure", "INFRA"),
-      projectId: normalizeText(body.projectId || budgetHead?.projectId),
-      budgetHeadId,
       name,
-      amount: Number(body.amount || 0),
       status: normalizeText(body.status || "Active"),
       createdBy: user.id,
       createdByName: user.name,
@@ -976,7 +991,7 @@ async function routeApi(req, res, pathname) {
       if (req.method === "DELETE") {
         softDelete(record, user);
       } else {
-        applyBasicPatch(record, await readBody(req), ["projectId", "budgetHeadId", "name", "amount", "status"]);
+        applyBasicPatch(record, await readBody(req), ["name", "status"]);
       }
       appendAuditEvent(store, req, user, {
         eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
@@ -1171,9 +1186,17 @@ async function routeApi(req, res, pathname) {
       const fromInfrastructureId = normalizeText(body.fromInfrastructureId);
       const toInfrastructureId = normalizeText(body.toInfrastructureId);
       if (type === "TRANSFER" && fromInfrastructureId === toInfrastructureId) return sendError(res, 400, "Transfer source and destination must be different.");
+      if (type === "TRANSFER" && !fromInfrastructureId) return sendError(res, 400, "Transfer source infrastructure is required.");
       if (type === "TRANSFER" && !toInfrastructureId) return sendError(res, 400, "Transfer destination infrastructure is required.");
-      if (["TRANSFER", "DISPOSED", "SPOILED"].includes(type) && availableQty(store, item.id, fromInfrastructureId) < quantity) {
-        return sendError(res, 400, `Insufficient stock for ${item.name}. Available: ${availableQty(store, item.id, fromInfrastructureId)} ${item.unit}`);
+      const sourceAvailable = availableQty(store, item.id, fromInfrastructureId);
+      if (["TRANSFER", "DISPOSED", "SPOILED"].includes(type) && sourceAvailable < quantity) {
+        const sourceName = fromInfrastructureId
+          ? store.infrastructures.find((entry) => entry.id === fromInfrastructureId)?.name || "selected infrastructure"
+          : "Store / Not Assigned";
+        const totalAvailable = inventorySummary(store)
+          .filter((entry) => entry.itemId === item.id)
+          .reduce((sum, entry) => sum + Number(entry.balance || 0), 0);
+        return sendError(res, 400, `Insufficient stock for ${item.name} at ${sourceName}. Available there: ${sourceAvailable} ${item.unit}. Total stock: ${totalAvailable} ${item.unit}.`);
       }
       const event = {
         id: nextId(store, "stockEvent", "SE"),
@@ -1314,8 +1337,8 @@ async function routeApi(req, res, pathname) {
       date: body.date || new Date().toISOString().slice(0, 10),
       requisitionId: body.requisitionId || "",
       projectId: normalizeText(body.projectId || requisition?.projectId),
-      budgetHeadId: normalizeText(body.budgetHeadId || requisition?.budgetHeadId),
-      infrastructureId: normalizeText(body.infrastructureId || requisition?.infrastructureId),
+      budgetHeadId: normalizeText(requisition?.budgetHeadId),
+      infrastructureId: normalizeText(requisition?.infrastructureId),
       supplier: normalizeText(body.supplier),
       challanNo: normalizeText(body.challanNo),
       challanDate: body.challanDate || "",
@@ -1352,8 +1375,10 @@ async function routeApi(req, res, pathname) {
         quantity,
         unit,
         projectId: receipt.projectId,
-        budgetHeadId: receipt.budgetHeadId,
-        infrastructureId: receipt.infrastructureId,
+        budgetHeadId: "",
+        infrastructureId: "",
+        fromInfrastructureId: "",
+        toInfrastructureId: "",
         referenceType: "receipt",
         referenceId: receipt.id,
         documentNo: receipt.challanNo,
@@ -1396,7 +1421,7 @@ async function routeApi(req, res, pathname) {
         softDelete(record, user);
         for (const movement of store.ledger.filter((entry) => entry.referenceType === "receipt" && entry.referenceId === record.id)) softDelete(movement, user);
       } else {
-        applyBasicPatch(record, await readBody(req), ["date", "supplier", "challanNo", "challanDate", "dvNo", "dvDate", "billNo", "billDate", "dispatchNo", "remarks", "budgetHeadId", "infrastructureId"]);
+        applyBasicPatch(record, await readBody(req), ["date", "supplier", "challanNo", "challanDate", "dvNo", "dvDate", "billNo", "billDate", "dispatchNo", "remarks"]);
       }
       appendAuditEvent(store, req, user, {
         eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
@@ -1441,8 +1466,12 @@ async function routeApi(req, res, pathname) {
     for (const line of lines) {
       const item = findOrCreateItem(store, line);
       const quantity = qtyNumber(line.quantity);
-      if (availableQty(store, item.id) < quantity) {
-        return sendError(res, 400, `Insufficient stock for ${item.name}. Available: ${availableQty(store, item.id)} ${item.unit}`);
+      const storeAvailable = availableQty(store, item.id);
+      if (storeAvailable < quantity) {
+        const totalAvailable = inventorySummary(store)
+          .filter((entry) => entry.itemId === item.id)
+          .reduce((sum, entry) => sum + Number(entry.balance || 0), 0);
+        return sendError(res, 400, `Insufficient store stock for ${item.name}. Store available: ${storeAvailable} ${item.unit}. Total stock: ${totalAvailable} ${item.unit}.`);
       }
       const unit = normalizeText(item.unit || line.unit);
       const category = normalizeText(item.category || line.category || line.specification);
@@ -1453,6 +1482,8 @@ async function routeApi(req, res, pathname) {
         specification: category,
         quantity,
         unit,
+        rate: Number(line.rate || 0),
+        amount: Number(line.amount || (Number(line.rate || 0) * quantity)),
         remarks: normalizeText(line.remarks)
       });
       linkedLedgerIds.push(addLedgerMovement(store, {
