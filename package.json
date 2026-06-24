@@ -14,7 +14,8 @@
     "start:local": "node scripts/start_local.mjs",
     "stop:server": "node scripts/stop_server.mjs",
     "import:resources": "node scripts/run_import_resources.mjs",
-    "supabase:sync": "node scripts/sync_supabase.mjs"
+    "supabase:sync": "node scripts/sync_supabase.mjs",
+    "backfill:receipt-budgets": "node scripts/backfill_receipt_budgets.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",

@@ -157,14 +157,62 @@ function summarizeLedger(rows = []) {
   return [...stock.values()].sort((a, b) => a.itemName.localeCompare(b.itemName));
 }
 
+function summarizeAllStock(inventory = [], ledger = []) {
+  const rows = new Map();
+  for (const stock of inventory) {
+    const current = rows.get(stock.itemId) || {
+      itemId: stock.itemId,
+      itemName: stock.itemName,
+      category: stock.category || "General",
+      unit: stock.unit || "",
+      receivedAtArrival: 0,
+      storeStock: 0,
+      infrastructureStock: 0,
+      disposedOrSpoiled: 0,
+      totalAvailable: 0,
+      lastMovementAt: stock.lastMovementAt || ""
+    };
+    if (stock.infrastructureId) current.infrastructureStock += Number(stock.balance || 0);
+    else current.storeStock += Number(stock.balance || 0);
+    if (!current.lastMovementAt || String(stock.lastMovementAt || "") > current.lastMovementAt) current.lastMovementAt = stock.lastMovementAt || "";
+    rows.set(stock.itemId, current);
+  }
+  for (const movement of ledger) {
+    const current = rows.get(movement.itemId) || {
+      itemId: movement.itemId,
+      itemName: movement.itemName,
+      category: movement.category || "General",
+      unit: movement.unit || "",
+      receivedAtArrival: 0,
+      storeStock: 0,
+      infrastructureStock: 0,
+      disposedOrSpoiled: 0,
+      totalAvailable: 0,
+      lastMovementAt: movement.date || ""
+    };
+    if (movement.type === "RECEIPT") current.receivedAtArrival += Number(movement.quantity || 0);
+    if (["DISPOSED", "SPOILED"].includes(movement.type)) current.disposedOrSpoiled += Number(movement.quantity || 0);
+    if (!current.lastMovementAt || String(movement.date || "") > current.lastMovementAt) current.lastMovementAt = movement.date || "";
+    rows.set(movement.itemId, current);
+  }
+  return [...rows.values()]
+    .map((row) => ({ ...row, totalAvailable: row.storeStock + row.infrastructureStock }))
+    .sort((a, b) => a.itemName.localeCompare(b.itemName));
+}
+
 function lineCategory(line = {}) {
   return line.category || line.specification || "";
 }
 
-function amountUsedFor(issues = [], field, id) {
-  return issues
-    .filter((issue) => issue[field] === id)
-    .reduce((sum, issue) => sum + (issue.lines || []).reduce((lineSum, line) => lineSum + Number(line.amount || 0), 0), 0);
+function lineAmount(line = {}) {
+  const explicit = Number(line.amount || 0);
+  return explicit || (Number(line.rate || 0) * Number(line.quantity || 0));
+}
+
+function amountUsedFor(records = [], field, id) {
+  return records
+    .filter((record) => record[field] === id)
+    .reduce((sum, record) => sum + (record.lines || []).reduce((lineSum, line) => lineSum + lineAmount(line), 0), 0);
 }
 
 function requisitionReceivedQty(receipts = [], requisitionId, itemId) {
@@ -177,7 +225,7 @@ function requisitionReceivedQty(receipts = [], requisitionId, itemId) {
 
 function budgetUsageRows(data) {
   return data.budgetHeads.map((head) => {
-    const used = amountUsedFor(data.issues, "budgetHeadId", head.id);
+    const used = amountUsedFor(data.receipts, "budgetHeadId", head.id);
     const amount = Number(head.amount || 0);
     return {
       id: head.id,
@@ -192,12 +240,24 @@ function budgetUsageRows(data) {
 
 function infrastructureUsageRows(data) {
   return data.infrastructures.map((infra) => {
-    const used = amountUsedFor(data.issues, "infrastructureId", infra.id);
+    const issuedItems = new Map();
+    for (const issue of data.issues.filter((record) => record.infrastructureId === infra.id)) {
+      for (const line of issue.lines || []) {
+        const key = `${line.itemId || line.itemName}::${line.unit || ""}`;
+        const current = issuedItems.get(key) || {
+          itemName: line.itemName || "Item",
+          unit: line.unit || "",
+          quantity: 0
+        };
+        current.quantity += Number(line.quantity || 0);
+        issuedItems.set(key, current);
+      }
+    }
     return {
       id: infra.id,
       name: infra.name,
       status: infra.status || "Active",
-      used
+      issuedItems: [...issuedItems.values()].sort((a, b) => a.itemName.localeCompare(b.itemName))
     };
   });
 }
@@ -467,27 +527,23 @@ function Dashboard({ data, user, api, refresh }) {
         <Kpi label="Low / Zero Stock" value={d.inventory.lowStock} />
       </div>
       <WorkflowStrip />
-      <div className="panel">
-        <PanelTitle title="Budget Head Chart" subtitle="Received/used amount and remaining balance for each budget head." />
-        <UsageBarChart rows={budgetRows} emptyText="No budget heads yet." />
-      </div>
-      <div className="grid two">
+      <div className="dashboard-overview-grid">
+        <div className="panel">
+          <PanelTitle title="Budget Head Chart" subtitle="Received/used amount and remaining balance for each budget head." />
+          <UsageBarChart rows={budgetRows} emptyText="No budget heads yet." />
+        </div>
         <div className="panel">
           <PanelTitle title="Needs Attention" subtitle="Requests waiting for verification, approval, or order placement." />
           {urgent.length ? <CompactRequestList rows={urgent} /> : <div className="empty compact-empty">No active approvals right now.</div>}
         </div>
-        <div className="panel">
-          <PanelTitle title="Stock Snapshot" subtitle="Top inventory balances from the current ledger." />
-          <InventoryTable rows={data.inventory.slice(0, 10)} compact />
-        </div>
       </div>
-      <div className="grid two">
+      <div className="dashboard-table-stack">
         <div className="panel">
           <PanelTitle title="Budget Head Usage" subtitle="Budget amount, received/used amount, and remaining balance." />
           <UsageTable rows={budgetRows} variant="budget" emptyText="No budget heads yet." />
         </div>
         <div className="panel">
-          <PanelTitle title="Key Infrastructure Usage" subtitle="Received/used amount tracked through requisitions and stock movements." />
+          <PanelTitle title="Key Infrastructure Usage" subtitle="Issued item quantities tracked separately by item and unit." />
           <UsageTable rows={infraRows} variant="infrastructure" emptyText="No key infrastructure yet." />
         </div>
       </div>
@@ -644,7 +700,7 @@ function UsageTable({ rows, emptyText, variant = "budget" }) {
           <tr>
             <th>{isBudget ? "Budget Head" : "Key Infrastructure"}</th>
             {isBudget ? <th>Budget Amount</th> : null}
-            <th>Used</th>
+            <th>{isBudget ? "Used" : "Issued Items"}</th>
             {isBudget ? <th>Balance</th> : null}
             <th>Status</th>
           </tr>
@@ -654,7 +710,11 @@ function UsageTable({ rows, emptyText, variant = "budget" }) {
             <tr key={row.id}>
               <td><strong>{row.name}</strong></td>
               {isBudget ? <td>{num(row.amount)}</td> : null}
-              <td>{num(row.used)}</td>
+              <td>{isBudget ? num(row.used) : (
+                row.issuedItems?.length
+                  ? <div className="quantity-summary">{row.issuedItems.map((item) => <span key={`${item.itemName}-${item.unit}`}>{fmt(item.itemName)}: <strong>{num(item.quantity)} {fmt(item.unit)}</strong></span>)}</div>
+                  : <span className="muted">No issued stock</span>
+              )}</td>
               {isBudget ? <td><strong className={row.balance < 0 ? "negative" : "positive"}>{num(row.balance)}</strong></td> : null}
               <td><span className="status">{row.status}</span></td>
             </tr>
@@ -872,7 +932,7 @@ function DetailBlock({ title, rows }) {
   );
 }
 
-function LineEditor({ items, lines, setLines, receipt = false, arrival = false, inventory = [], costing = false }) {
+function LineEditor({ items, lines, setLines, receipt = false, arrival = false, inventory = [] }) {
   function update(index, patch) {
     setLines(lines.map((line, i) => i === index ? { ...line, ...patch } : line));
   }
@@ -906,7 +966,7 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false, 
         {lines.map((line, index) => {
           const stockStats = inventory.length ? stockStatsForLine(line) : null;
           return (
-          <div className={`line-row ${receipt ? "receipt-line" : ""}`} key={index}>
+          <div className={`line-row ${receipt ? "receipt-line" : ""} ${stockStats ? "stock-line" : ""}`} key={index}>
             <label>Item <input list="itemOptions" value={line.itemName} onChange={(e) => {
               const item = matchItem(e.target.value);
               update(index, {
@@ -929,12 +989,12 @@ function LineEditor({ items, lines, setLines, receipt = false, arrival = false, 
               <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} />
             </label>
             {stockStats ? <div className="stock-hint-cell"><span className="stock-hint">Store stock: {num(stockStats.store)} {line.unit}{stockStats.total !== stockStats.store ? ` | Total stock: ${num(stockStats.total)} ${line.unit}` : ""}</span></div> : null}
-            {receipt || costing ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => {
+            {receipt ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => {
               const rate = e.target.value;
               const quantity = Number(line.quantity || 0);
               update(index, { rate, amount: quantity && rate !== "" ? String(Number(rate || 0) * quantity) : line.amount });
             }} /></label> : null}
-            {receipt || costing ? <label>Amount <input type="number" step="0.01" min="0" value={line.amount || ""} onChange={(e) => update(index, { amount: e.target.value })} /></label> : null}
+            {receipt ? <label>Amount <input type="number" step="0.01" min="0" value={line.amount || ""} onChange={(e) => update(index, { amount: e.target.value })} /></label> : null}
             {arrival ? <label className="check-label">Arrived <input type="checkbox" checked={line.reached !== false} onChange={(e) => update(index, { reached: e.target.checked })} /></label> : null}
             <label>Remarks <input value={line.remarks} onChange={(e) => update(index, { remarks: e.target.value })} /></label>
             <button type="button" className="icon-button" disabled={lines.length === 1} onClick={() => setLines(lines.filter((_, i) => i !== index))} title="Remove item line">
@@ -1277,15 +1337,15 @@ function ReceiveStock({ data, api, refresh, setView }) {
         <PanelTitle title="Receipt Details" subtitle="Use this screen only after the order has reached the store. Received stock is placed into Store first." />
         {error ? <div className="error">{error}</div> : null}
         <div className="grid four">
-          <label>Linked Requisition <select value={form.requisitionId} onChange={(e) => selectRequisition(e.target.value)}><option value="">No linked requisition</option>{approved.map((r) => <option key={r.id} value={r.id}>{r.requisitionNo} - {statusLabels[r.status]}</option>)}</select></label>
+          <label>Linked Requisition <select value={form.requisitionId} onChange={(e) => selectRequisition(e.target.value)} required><option value="">Select approved requisition</option>{approved.map((r) => <option key={r.id} value={r.id}>{r.requisitionNo} - {statusLabels[r.status]}</option>)}</select></label>
           <label>Receipt Date <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></label>
           <label>Supplier / Party <input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></label>
         </div>
         <div className="workflow-note">
-          <strong>Receipt goes to Store</strong>
+          <strong>Receipt goes to Store and charges the budget</strong>
           <span>Requested Budget Head: {fmt(budgetMap[form.budgetHeadId]?.name || form.budgetHeadId)}</span>
           <span>Requested Key Infrastructure: {fmt(infrastructureMap[form.infrastructureId]?.name || form.infrastructureId)}</span>
-          <span>Assign stock to a budget head and key infrastructure from the Issue Stock screen.</span>
+          <span>The actual arrived line amount is deducted from the linked budget head. Issue Stock assigns quantities and value to the key infrastructure.</span>
         </div>
         <div className="document-band">
           <PanelTitle title="Arrival Documents" subtitle="Record these only after approved stock reaches the store or site." />
@@ -1322,6 +1382,7 @@ function Inventory({ data }) {
   const unassignedLedger = data.ledger.filter((row) => !row.infrastructureId || !infrastructureMap[row.infrastructureId]);
   const unassignedStock = summarizeLedger(unassignedLedger);
   const activeGroups = groups.filter((group) => group.stock.length || group.ledger.length);
+  const allStockSummary = summarizeAllStock(data.inventory, data.ledger);
   return (
     <>
       <Header title="Inventory" eyebrow="Stock tracking" subtitle="Read-only stock summary, key infrastructure balances, item trace, and complete ledger history." />
@@ -1336,8 +1397,8 @@ function Inventory({ data }) {
       />
       {activeTab === "summary" ? (
         <div className="panel">
-          <PanelTitle title="All Stock Summary" subtitle="Complete stock balance across store and infrastructure movements." />
-          <InventoryTable rows={data.inventory} infrastructures={data.infrastructures} />
+          <PanelTitle title="All Stock Summary" subtitle="One row per item across Store and all key infrastructures." />
+          <AllStockSummaryTable rows={allStockSummary} />
         </div>
       ) : null}
       {activeTab === "infrastructure" ? (
@@ -1376,6 +1437,65 @@ function ledgerDocumentFields(row, receiptMap = {}) {
   };
 }
 
+function lifecycleGroupKey(row) {
+  if (row.lifecycleEventId) return row.lifecycleEventId;
+  if (row.referenceType && row.referenceId) {
+    const lineKey = row.lineId || `${row.itemId}:${row.quantity}:${row.unit || ""}`;
+    return `${row.referenceType}:${row.referenceId}:${lineKey}`;
+  }
+  return row.id;
+}
+
+function lifecycleLabel(types, rows) {
+  if (types.has("ISSUE") && types.has("TRANSFER_IN")) return "Issued to Infrastructure";
+  if (types.has("TRANSFER_OUT") && types.has("TRANSFER_IN")) return "Infrastructure Transfer";
+  const type = rows[0]?.type || "";
+  if (type === "RECEIPT") return "Received at Store";
+  if (type === "RETURNED_FROM_REPAIR") return "Returned from Repair";
+  if (type === "REPAIR_NOTE") return "Under Repair";
+  if (type === "DISPOSED") return "Disposed";
+  if (type === "SPOILED") return "Spoiled";
+  if (type === "ADJUSTMENT") return "Stock Adjustment";
+  return rows[0]?.lifecycleStatus || type;
+}
+
+function buildLifecycleEvents(rows = [], receipts = []) {
+  const receiptMap = byId(receipts);
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = lifecycleGroupKey(row);
+    const group = grouped.get(key) || [];
+    group.push(row);
+    grouped.set(key, group);
+  }
+  return [...grouped.entries()].map(([id, rawRows]) => {
+    const types = new Set(rawRows.map((row) => row.type));
+    const source = rawRows.find((row) => row.movementRole === "source" || ["ISSUE", "TRANSFER_OUT"].includes(row.type)) || rawRows[0];
+    const destination = rawRows.find((row) => row.movementRole === "destination" || row.type === "TRANSFER_IN");
+    const representative = source || rawRows[0];
+    const docs = ledgerDocumentFields(representative, receiptMap);
+    return {
+      id,
+      date: representative.date,
+      lifecycle: lifecycleLabel(types, rawRows),
+      type: types.has("ISSUE") ? "ISSUE" : types.has("TRANSFER_OUT") ? "TRANSFER" : representative.type,
+      itemId: representative.itemId,
+      itemName: representative.itemName,
+      quantity: Math.max(...rawRows.map((row) => Number(row.quantity || 0))),
+      unit: representative.unit,
+      fromInfrastructureId: source?.fromInfrastructureId || (source?.type === "TRANSFER_OUT" ? source.infrastructureId : ""),
+      toInfrastructureId: destination?.toInfrastructureId || destination?.infrastructureId || representative.toInfrastructureId || representative.infrastructureId || "",
+      documentNo: docs.documentNo,
+      challanNo: docs.challanNo,
+      dvNo: docs.dvNo,
+      billNo: docs.billNo,
+      dutyPerson: representative.dutyPerson || representative.createdByName,
+      remarks: representative.remarks,
+      rawRows
+    };
+  }).sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(b.id).localeCompare(String(a.id)));
+}
+
 function InventoryLedgerTab({ data, traceItemId, setTraceItemId }) {
   const transferEvents = data.stockEvents.filter((event) => event.type === "TRANSFER");
   const conditionEvents = data.stockEvents.filter((event) => ["RETURNED_FROM_REPAIR", "REPAIR_NOTE", "DISPOSED", "SPOILED"].includes(event.type));
@@ -1405,12 +1525,10 @@ function InventoryLedgerTab({ data, traceItemId, setTraceItemId }) {
 }
 
 function ItemTracePanel({ data, traceItemId, setTraceItemId }) {
-  const infrastructureMap = byId(data.infrastructures);
-  const receiptMap = byId(data.receipts);
   const rows = data.ledger
     .filter((row) => !traceItemId || row.itemId === traceItemId)
-    .slice()
-    .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    .slice();
+  const events = buildLifecycleEvents(rows, data.receipts);
   return (
     <div className="panel">
       <PanelTitle title="Item Trace" subtitle="Select an item to inspect its full lifecycle and movement history." />
@@ -1420,32 +1538,8 @@ function ItemTracePanel({ data, traceItemId, setTraceItemId }) {
           {data.items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
       </div>
-      <div className="table-wrap full-ledger-wrap">
-        <table>
-          <thead><tr><th>Date</th><th>Lifecycle</th><th>Type</th><th>Item</th><th>Qty</th><th>From</th><th>To / Location</th><th>Challan No</th><th>DV No</th><th>Bill No</th><th>Document</th><th>Duty Person</th><th>Remarks</th></tr></thead>
-          <tbody>{rows.map((row) => {
-            const docs = ledgerDocumentFields(row, receiptMap);
-            return (
-              <tr key={row.id}>
-                <td>{fmt(row.date)}</td>
-                <td><span className="status">{fmt(row.lifecycleStatus)}</span></td>
-                <td>{fmt(row.type)}</td>
-                <td><strong>{fmt(row.itemName)}</strong></td>
-                <td>{num(row.quantity)} {fmt(row.unit)}</td>
-                <td>{fmt(infrastructureMap[row.fromInfrastructureId]?.name || (row.fromInfrastructureId ? row.fromInfrastructureId : "Store"))}</td>
-                <td>{fmt(infrastructureMap[row.toInfrastructureId]?.name || infrastructureMap[row.infrastructureId]?.name || (row.toInfrastructureId ? row.toInfrastructureId : "Store"))}</td>
-                <td>{fmt(docs.challanNo)}</td>
-                <td>{fmt(docs.dvNo)}</td>
-                <td>{fmt(docs.billNo)}</td>
-                <td>{fmt(docs.documentNo)}</td>
-                <td>{fmt(row.dutyPerson || row.createdByName)}</td>
-                <td>{fmt(row.remarks)}</td>
-              </tr>
-            );
-          })}</tbody>
-        </table>
-      </div>
-      {!rows.length ? <div className="empty compact-empty">No lifecycle movements found.</div> : null}
+      <LifecycleLedgerTable events={events} infrastructures={data.infrastructures} receipts={data.receipts} />
+      {!events.length ? <div className="empty compact-empty">No lifecycle movements found.</div> : null}
     </div>
   );
 }
@@ -1512,12 +1606,29 @@ function InfrastructureInventorySection({ group }) {
         </div>
         <div>
           <h3 className="section-subtitle">Recent Movements</h3>
-          <div className="table-wrap">
-            <LedgerTable rows={group.ledger.slice().reverse().slice(0, 12)} compact />
-          </div>
+          <RecentMovementTable rows={group.ledger.slice().reverse().slice(0, 5)} />
         </div>
       </div>
     </section>
+  );
+}
+
+function RecentMovementTable({ rows = [] }) {
+  if (!rows.length) return <div className="empty compact-empty">No recent movements.</div>;
+  return (
+    <div className="recent-movement-table">
+      <table>
+        <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Quantity</th></tr></thead>
+        <tbody>{rows.map((row) => (
+          <tr key={row.id}>
+            <td>{fmt(row.date)}</td>
+            <td><span className="movement-type">{fmt(row.type)}</span></td>
+            <td><strong>{fmt(row.itemName)}</strong></td>
+            <td>{num(row.quantity)} {fmt(row.unit)}</td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1533,6 +1644,36 @@ function InventoryTable({ rows, compact = false, infrastructures = [] }) {
         <table>
           <thead><tr><th>Item</th>{compact ? null : <th>Location</th>}<th>Category</th><th>Received</th><th>Issued</th><th>Balance</th><th>Unit</th><th>Last Movement</th></tr></thead>
           <tbody>{filtered.map((r) => <tr key={`${r.infrastructureId || "store"}-${r.itemId}`}><td><strong>{fmt(r.itemName)}</strong></td>{compact ? null : <td>{fmt(infrastructureMap[r.infrastructureId]?.name || "Store")}</td>}<td>{fmt(r.category)}</td><td>{num(r.received)}</td><td>{num(r.issued)}</td><td><strong className={Number(r.balance) <= 0 ? "negative" : "positive"}>{num(r.balance)}</strong></td><td>{fmt(r.unit)}</td><td>{fmt(r.lastMovementAt)}</td></tr>)}</tbody>
+        </table>
+      </div>
+      {!filtered.length ? <div className="empty compact-empty">No matching stock items.</div> : null}
+    </>
+  );
+}
+
+function AllStockSummaryTable({ rows = [] }) {
+  const [query, setQuery] = useState("");
+  const filtered = rows.filter((row) => matchesSearch([row.itemName, row.category, row.unit, row.lastMovementAt], query));
+  if (!rows.length) return <div className="empty">No stock movements found.</div>;
+  return (
+    <>
+      <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search all stock" /></div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>Item</th><th>Category</th><th>Received at Arrival</th><th>Store Stock</th><th>Infrastructure Stock</th><th>Disposed / Spoiled</th><th>Total Available</th><th>Unit</th><th>Last Movement</th></tr></thead>
+          <tbody>{filtered.map((row) => (
+            <tr key={row.itemId}>
+              <td><strong>{fmt(row.itemName)}</strong></td>
+              <td>{fmt(row.category)}</td>
+              <td>{num(row.receivedAtArrival)}</td>
+              <td>{num(row.storeStock)}</td>
+              <td>{num(row.infrastructureStock)}</td>
+              <td>{num(row.disposedOrSpoiled)}</td>
+              <td><strong className={Number(row.totalAvailable) <= 0 ? "negative" : "positive"}>{num(row.totalAvailable)}</strong></td>
+              <td>{fmt(row.unit)}</td>
+              <td>{fmt(row.lastMovementAt)}</td>
+            </tr>
+          ))}</tbody>
         </table>
       </div>
       {!filtered.length ? <div className="empty compact-empty">No matching stock items.</div> : null}
@@ -1620,20 +1761,55 @@ function IssueHistoryTable({ issues = [] }) {
 function FullLedgerTable({ rows = [], infrastructures = [], receipts = [] }) {
   const [query, setQuery] = useState("");
   const infrastructureMap = byId(infrastructures);
-  const receiptMap = byId(receipts);
-  const filtered = rows.filter((row) => {
-    const docs = ledgerDocumentFields(row, receiptMap);
-    return matchesSearch([row.date, row.type, row.itemName, docs.documentNo, docs.challanNo, docs.dvNo, docs.billNo, row.dutyPerson, row.remarks, infrastructureMap[row.fromInfrastructureId]?.name, infrastructureMap[row.toInfrastructureId]?.name], query);
+  const events = buildLifecycleEvents(rows, receipts);
+  const filtered = events.filter((event) => {
+    return matchesSearch([event.date, event.type, event.lifecycle, event.itemName, event.documentNo, event.challanNo, event.dvNo, event.billNo, event.dutyPerson, event.remarks, infrastructureMap[event.fromInfrastructureId]?.name, infrastructureMap[event.toInfrastructureId]?.name], query);
   });
   if (!rows.length) return <div className="empty">No ledger movements found.</div>;
   return (
     <>
-      <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search full ledger" /></div>
-      <div className="table-wrap full-ledger-wrap">
-        <LedgerTable rows={filtered} infrastructures={infrastructures} receipts={receipts} />
-      </div>
+      <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search lifecycle ledger" /></div>
+      <LifecycleLedgerTable events={filtered} infrastructures={infrastructures} receipts={receipts} />
       {!filtered.length ? <div className="empty compact-empty">No matching ledger movements.</div> : null}
     </>
+  );
+}
+
+function LifecycleLedgerTable({ events = [], infrastructures = [], receipts = [] }) {
+  const infrastructureMap = byId(infrastructures);
+  if (!events.length) return <div className="empty">No lifecycle movements found.</div>;
+  return (
+    <div className="table-wrap full-ledger-wrap">
+      <table className="lifecycle-table">
+        <thead><tr><th>Date</th><th>Lifecycle</th><th>Item</th><th>Qty</th><th>From</th><th>To / Location</th><th>Challan No</th><th>DV No</th><th>Bill No</th><th>Document</th><th>Duty Person</th><th>Remarks</th><th>Audit Detail</th></tr></thead>
+        <tbody>{events.map((event) => (
+          <React.Fragment key={event.id}>
+            <tr>
+              <td>{fmt(event.date)}</td>
+              <td><span className="status">{fmt(event.lifecycle)}</span></td>
+              <td><strong>{fmt(event.itemName)}</strong></td>
+              <td>{num(event.quantity)} {fmt(event.unit)}</td>
+              <td>{fmt(infrastructureMap[event.fromInfrastructureId]?.name || (event.fromInfrastructureId ? event.fromInfrastructureId : "Store"))}</td>
+              <td>{fmt(infrastructureMap[event.toInfrastructureId]?.name || (event.toInfrastructureId ? event.toInfrastructureId : "Store"))}</td>
+              <td>{fmt(event.challanNo)}</td>
+              <td>{fmt(event.dvNo)}</td>
+              <td>{fmt(event.billNo)}</td>
+              <td>{fmt(event.documentNo)}</td>
+              <td>{fmt(event.dutyPerson)}</td>
+              <td>{fmt(event.remarks)}</td>
+              <td>
+                <details className="ledger-raw-details">
+                  <summary>{event.rawRows.length} raw movement{event.rawRows.length === 1 ? "" : "s"}</summary>
+                  <div className="ledger-raw-table">
+                    <LedgerTable rows={event.rawRows} infrastructures={infrastructures} receipts={receipts} />
+                  </div>
+                </details>
+              </td>
+            </tr>
+          </React.Fragment>
+        ))}</tbody>
+      </table>
+    </div>
   );
 }
 
@@ -1738,9 +1914,9 @@ function IssueStockForm({ data, api, refresh, setView }) {
       </div>
       <div className="workflow-note">
         <strong>Issue preview</strong>
-        <span>Stock will reduce from Store, charge the selected budget head by the item amount, and be traced to the selected key infrastructure and duty personnel.</span>
+        <span>Stock will reduce from Store and be traced to the selected key infrastructure and duty personnel. The budget was already charged from the actual receipt amount when the stock arrived.</span>
       </div>
-      <LineEditor items={data.items} lines={lines} setLines={setLines} inventory={data.inventory} costing />
+      <LineEditor items={data.items} lines={lines} setLines={setLines} inventory={data.inventory} />
       <label>Remarks <textarea rows="2" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
       <button className="primary" type="submit">Issue stock</button>
     </form>

@@ -727,6 +727,9 @@ function addLedgerMovement(store, movement) {
     documentNo: movement.documentNo || "",
     remarks: movement.remarks || "",
     lifecycleStatus: movement.lifecycleStatus || lifecycleStatusForMovement(movement.type, movement.infrastructureId || ""),
+    lifecycleEventId: movement.lifecycleEventId || "",
+    lineId: movement.lineId || "",
+    movementRole: movement.movementRole || "single",
     createdBy: movement.createdBy || "",
     createdByName: movement.createdByName || ""
   };
@@ -1221,6 +1224,7 @@ async function routeApi(req, res, pathname) {
 
       if (type === "TRANSFER") {
         const transferNo = nextId(store, "transfer", "TR");
+        const lifecycleEventId = `stockEvent:${event.id}`;
         linkedLedgerIds.push(addLedgerMovement(store, {
           type: "TRANSFER_OUT",
           date: event.date,
@@ -1232,6 +1236,9 @@ async function routeApi(req, res, pathname) {
           toInfrastructureId,
           referenceType: "stockEvent",
           referenceId: event.id,
+          lifecycleEventId,
+          lineId: event.id,
+          movementRole: "source",
           documentNo: event.documentNo || transferNo,
           dutyPerson: event.dutyPerson,
           remarks: event.remarks,
@@ -1249,6 +1256,9 @@ async function routeApi(req, res, pathname) {
           toInfrastructureId,
           referenceType: "stockEvent",
           referenceId: event.id,
+          lifecycleEventId,
+          lineId: event.id,
+          movementRole: "destination",
           documentNo: event.documentNo || transferNo,
           dutyPerson: event.dutyPerson,
           remarks: event.remarks,
@@ -1267,6 +1277,9 @@ async function routeApi(req, res, pathname) {
           toInfrastructureId,
           referenceType: "stockEvent",
           referenceId: event.id,
+          lifecycleEventId: `stockEvent:${event.id}`,
+          lineId: event.id,
+          movementRole: "single",
           documentNo: event.documentNo,
           dutyPerson: event.dutyPerson,
           remarks: event.remarks,
@@ -1327,15 +1340,20 @@ async function routeApi(req, res, pathname) {
     const lines = (body.lines || []).filter((line) => normalizeText(line.itemName || line.name));
     if (!lines.length) return sendError(res, 400, "Add at least one received item.");
     const beforeItemIds = new Set(store.items.map((item) => item.id));
-    const requisition = body.requisitionId ? store.requisitions.find((entry) => entry.id === body.requisitionId) : null;
-    if (body.requisitionId && !requisition) return sendError(res, 404, "Linked requisition not found.");
-    if (requisition && !["APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(requisition.status)) {
+    const requisitionId = normalizeText(body.requisitionId);
+    if (!requisitionId) return sendError(res, 400, "Select an approved requisition before recording stock arrival.");
+    const requisition = store.requisitions.find((entry) => entry.id === requisitionId && !entry.isDeleted && !entry.deletedAt);
+    if (!requisition) return sendError(res, 404, "Linked requisition not found.");
+    if (!["APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(requisition.status)) {
       return sendError(res, 400, "Stock can be received only after approval/order placement.");
+    }
+    if (!normalizeText(requisition.budgetHeadId)) {
+      return sendError(res, 400, "The linked requisition has no budget head. Assign one before receiving stock.");
     }
     const receipt = {
       id: nextId(store, "receipt", "REC"),
       date: body.date || new Date().toISOString().slice(0, 10),
-      requisitionId: body.requisitionId || "",
+      requisitionId,
       projectId: normalizeText(body.projectId || requisition?.projectId),
       budgetHeadId: normalizeText(requisition?.budgetHeadId),
       infrastructureId: normalizeText(requisition?.infrastructureId),
@@ -1358,6 +1376,7 @@ async function routeApi(req, res, pathname) {
       const quantity = qtyNumber(line.quantity);
       const unit = normalizeText(line.unit || item.unit);
       receipt.lines.push({
+        id: `rli-${crypto.randomUUID().slice(0, 8)}`,
         itemId: item.id,
         itemName: item.name,
         category: normalizeText(line.category || line.specification),
@@ -1368,6 +1387,7 @@ async function routeApi(req, res, pathname) {
         amount: Number(line.amount || (Number(line.rate || 0) * quantity)),
         remarks: normalizeText(line.remarks)
       });
+      const receiptLine = receipt.lines[receipt.lines.length - 1];
       linkedLedgerIds.push(addLedgerMovement(store, {
         type: "RECEIPT",
         date: receipt.date,
@@ -1375,12 +1395,15 @@ async function routeApi(req, res, pathname) {
         quantity,
         unit,
         projectId: receipt.projectId,
-        budgetHeadId: "",
+        budgetHeadId: receipt.budgetHeadId,
         infrastructureId: "",
         fromInfrastructureId: "",
         toInfrastructureId: "",
         referenceType: "receipt",
         referenceId: receipt.id,
+        lifecycleEventId: `receipt:${receipt.id}:${receiptLine.id}`,
+        lineId: receiptLine.id,
+        movementRole: "single",
         documentNo: receipt.challanNo,
         remarks: receipt.remarks
       }).id);
@@ -1476,16 +1499,17 @@ async function routeApi(req, res, pathname) {
       const unit = normalizeText(item.unit || line.unit);
       const category = normalizeText(item.category || line.category || line.specification);
       issue.lines.push({
+        id: `ili-${crypto.randomUUID().slice(0, 8)}`,
         itemId: item.id,
         itemName: item.name,
         category,
         specification: category,
         quantity,
         unit,
-        rate: Number(line.rate || 0),
-        amount: Number(line.amount || (Number(line.rate || 0) * quantity)),
         remarks: normalizeText(line.remarks)
       });
+      const issueLine = issue.lines[issue.lines.length - 1];
+      const lifecycleEventId = `issue:${issue.id}:${issueLine.id}`;
       linkedLedgerIds.push(addLedgerMovement(store, {
         type: "ISSUE",
         date: issue.date,
@@ -1499,6 +1523,9 @@ async function routeApi(req, res, pathname) {
         toInfrastructureId: issue.infrastructureId,
         referenceType: "issue",
         referenceId: issue.id,
+        lifecycleEventId,
+        lineId: issueLine.id,
+        movementRole: issue.infrastructureId ? "source" : "single",
         documentNo: issue.issueChallanNo,
         dutyPerson: issue.issuedTo,
         remarks: issue.remarks
@@ -1517,6 +1544,9 @@ async function routeApi(req, res, pathname) {
           toInfrastructureId: issue.infrastructureId,
           referenceType: "issue",
           referenceId: issue.id,
+          lifecycleEventId,
+          lineId: issueLine.id,
+          movementRole: "destination",
           documentNo: issue.issueChallanNo,
           dutyPerson: issue.issuedTo,
           remarks: issue.remarks
