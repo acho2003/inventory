@@ -437,6 +437,14 @@ h2 { margin-bottom: 8px; font-size: 17px; }
   color: #ffffff;
 }
 
+.workflow-step:nth-child(4) strong,
+.workflow-step:nth-child(4) small,
+.workflow-step:nth-child(5) strong,
+.workflow-step:nth-child(5) small {
+  color: #111827;
+  opacity: 1;
+}
+
 .request-list,
 .approval-list {
   display: grid;
@@ -528,6 +536,44 @@ h2 { margin-bottom: 8px; font-size: 17px; }
 }
 
 .table-tools > select { max-width: 220px; }
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.3fr) minmax(180px, 1fr) minmax(140px, 0.7fr) minmax(140px, 0.7fr) auto;
+  align-items: end;
+  justify-content: stretch;
+}
+
+.filter-grid label,
+.filter-total {
+  margin: 0;
+}
+
+.compact-filter-panel {
+  padding: 14px;
+}
+
+.filter-total {
+  display: grid;
+  gap: 3px;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-soft);
+}
+
+.filter-total span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.filter-total strong {
+  color: var(--navy);
+  font-size: 18px;
+}
 
 .search-box {
   position: relative;
@@ -1326,6 +1372,7 @@ tbody tr:hover td { background: #f9fbfd; }
   .approval-timeline { grid-template-columns: 1fr 1fr; }
   .ledger-history-grid { grid-template-columns: 1fr; }
   .grid.two.infrastructure-stock-grid { grid-template-columns: 1fr; }
+  .filter-grid { grid-template-columns: 1fr 1fr; }
   .line-row,
   .line-row.receipt-line,
   .line-row.stock-line { grid-template-columns: 1fr 1fr; }
@@ -1347,6 +1394,7 @@ tbody tr:hover td { background: #f9fbfd; }
   .audit-tools,
   .approval-meta,
   .approval-timeline,
+  .filter-grid,
   .line-row,
   .line-row.receipt-line,
   .line-row.stock-line { grid-template-columns: 1fr; }

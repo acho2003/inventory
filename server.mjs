@@ -632,6 +632,79 @@ function receivedQtyForRequisition(store, requisitionId, itemId) {
       .reduce((lineSum, line) => lineSum + Number(line.quantity || 0), 0), 0);
 }
 
+function lineAmount(line = {}) {
+  const explicit = Number(line.amount || 0);
+  return explicit || (Number(line.rate || 0) * Number(line.quantity || 0));
+}
+
+function stockEventAmount(event = {}) {
+  return Number(event.amount || 0);
+}
+
+function conditionBudgetEvents(store) {
+  return activeRows(store.stockEvents)
+    .filter((event) => ["REPAIR_NOTE", "RETURNED_FROM_REPAIR"].includes(event.type) && stockEventAmount(event) > 0);
+}
+
+function budgetUsageRows(store) {
+  const receipts = activeRows(store.receipts);
+  const repairCosts = conditionBudgetEvents(store);
+  return activeRows(store.budgetHeads).map((head) => {
+    const receiptUsed = receipts
+      .filter((receipt) => receipt.budgetHeadId === head.id)
+      .reduce((sum, receipt) => sum + (receipt.lines || []).reduce((lineSum, line) => lineSum + lineAmount(line), 0), 0);
+    const repairUsed = repairCosts
+      .filter((event) => event.budgetHeadId === head.id)
+      .reduce((sum, event) => sum + stockEventAmount(event), 0);
+    const amount = Number(head.amount || 0);
+    const used = receiptUsed + repairUsed;
+    return {
+      id: head.id,
+      name: head.name,
+      amount,
+      used,
+      balance: amount - used,
+      status: head.status || "Active"
+    };
+  });
+}
+
+function infrastructureUsageRows(store) {
+  const receipts = activeRows(store.receipts);
+  const repairCosts = conditionBudgetEvents(store);
+  return activeRows(store.infrastructures).map((infra) => {
+    const receiptUsed = receipts
+      .filter((receipt) => receipt.infrastructureId === infra.id)
+      .reduce((sum, receipt) => sum + (receipt.lines || []).reduce((lineSum, line) => lineSum + lineAmount(line), 0), 0);
+    const repairUsed = repairCosts
+      .filter((event) => (event.fromInfrastructureId || event.toInfrastructureId) === infra.id)
+      .reduce((sum, event) => sum + stockEventAmount(event), 0);
+    return {
+      id: infra.id,
+      name: infra.name,
+      used: receiptUsed + repairUsed,
+      status: infra.status || "Active"
+    };
+  });
+}
+
+function orderedItemRows(store) {
+  const rows = [];
+  for (const requisition of activeRows(store.requisitions)) {
+    const date = String(requisition.date || requisition.createdAt || "").slice(0, 10);
+    for (const line of requisition.lines || []) {
+      rows.push({
+        date,
+        itemId: line.itemId || "",
+        itemName: line.itemName || "Item",
+        quantity: Number(line.quantity || 0),
+        unit: line.unit || ""
+      });
+    }
+  }
+  return rows;
+}
+
 function dashboard(store) {
   const inventory = inventorySummary(store);
   return {
@@ -651,7 +724,10 @@ function dashboard(store) {
       receiptsWithChallan: store.receipts.filter((r) => r.challanNo).length,
       receiptsWithDv: store.receipts.filter((r) => r.dvNo).length,
       receiptsWithBill: store.receipts.filter((r) => r.billNo).length
-    }
+    },
+    budgetUsage: budgetUsageRows(store),
+    infrastructureUsage: infrastructureUsageRows(store),
+    orderedItems: orderedItemRows(store)
   };
 }
 
@@ -725,6 +801,7 @@ function addLedgerMovement(store, movement) {
     referenceType: movement.referenceType,
     referenceId: movement.referenceId,
     documentNo: movement.documentNo || "",
+    amount: Number(movement.amount || 0),
     remarks: movement.remarks || "",
     lifecycleStatus: movement.lifecycleStatus || lifecycleStatusForMovement(movement.type, movement.infrastructureId || ""),
     lifecycleEventId: movement.lifecycleEventId || "",
@@ -1188,9 +1265,13 @@ async function routeApi(req, res, pathname) {
       const quantity = type === "REPAIR_NOTE" ? Number(body.quantity || 0) : qtyNumber(body.quantity);
       const fromInfrastructureId = normalizeText(body.fromInfrastructureId);
       const toInfrastructureId = normalizeText(body.toInfrastructureId);
+      const budgetHeadId = normalizeText(body.budgetHeadId);
+      const amount = Number(body.amount || 0);
       if (type === "TRANSFER" && fromInfrastructureId === toInfrastructureId) return sendError(res, 400, "Transfer source and destination must be different.");
       if (type === "TRANSFER" && !fromInfrastructureId) return sendError(res, 400, "Transfer source infrastructure is required.");
       if (type === "TRANSFER" && !toInfrastructureId) return sendError(res, 400, "Transfer destination infrastructure is required.");
+      if (amount < 0) return sendError(res, 400, "Amount cannot be negative.");
+      if (amount > 0 && ["REPAIR_NOTE", "RETURNED_FROM_REPAIR"].includes(type) && !budgetHeadId) return sendError(res, 400, "Budget head is required when recording repair or return amount.");
       const sourceAvailable = availableQty(store, item.id, fromInfrastructureId);
       if (["TRANSFER", "DISPOSED", "SPOILED"].includes(type) && sourceAvailable < quantity) {
         const sourceName = fromInfrastructureId
@@ -1212,6 +1293,8 @@ async function routeApi(req, res, pathname) {
         unit: normalizeText(body.unit || item.unit),
         fromInfrastructureId,
         toInfrastructureId,
+        budgetHeadId,
+        amount,
         dutyPerson: normalizeText(body.dutyPerson),
         documentNo: normalizeText(body.documentNo),
         remarks: normalizeText(body.remarks),
@@ -1277,6 +1360,8 @@ async function routeApi(req, res, pathname) {
           toInfrastructureId,
           referenceType: "stockEvent",
           referenceId: event.id,
+          budgetHeadId: event.budgetHeadId,
+          amount: event.amount,
           lifecycleEventId: `stockEvent:${event.id}`,
           lineId: event.id,
           movementRole: "single",
@@ -1314,7 +1399,7 @@ async function routeApi(req, res, pathname) {
         softDelete(record, user);
         for (const movement of store.ledger.filter((entry) => entry.referenceType === "stockEvent" && entry.referenceId === record.id)) softDelete(movement, user);
       } else {
-        applyBasicPatch(record, await readBody(req), ["date", "dutyPerson", "documentNo", "remarks"]);
+        applyBasicPatch(record, await readBody(req), ["date", "budgetHeadId", "amount", "dutyPerson", "documentNo", "remarks"]);
       }
       appendAuditEvent(store, req, user, {
         eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
@@ -1401,6 +1486,7 @@ async function routeApi(req, res, pathname) {
         toInfrastructureId: "",
         referenceType: "receipt",
         referenceId: receipt.id,
+        amount: receiptLine.amount,
         lifecycleEventId: `receipt:${receipt.id}:${receiptLine.id}`,
         lineId: receiptLine.id,
         movementRole: "single",
