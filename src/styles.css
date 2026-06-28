@@ -104,6 +104,7 @@ h2 { margin-bottom: 8px; font-size: 17px; }
   display: grid;
   place-items: center;
   padding: 28px;
+  overflow-x: hidden;
 }
 
 .login-panel {
@@ -132,6 +133,7 @@ h2 { margin-bottom: 8px; font-size: 17px; }
   margin: 0;
   font-size: 36px;
   line-height: 1.1;
+  overflow-wrap: anywhere;
 }
 
 .login-copy p {
@@ -187,6 +189,98 @@ h2 { margin-bottom: 8px; font-size: 17px; }
 .demo-users button span {
   color: var(--muted);
   font-size: 12px;
+}
+
+@media (max-width: 860px) {
+  .login {
+    align-items: start;
+    padding: 18px;
+  }
+
+  .login-panel {
+    grid-template-columns: 1fr;
+    max-width: 560px;
+  }
+
+  .login-copy {
+    padding: 30px;
+    align-content: start;
+  }
+
+  .login-copy h1 {
+    font-size: 30px;
+  }
+
+  .login-form {
+    padding: 30px;
+  }
+
+  .demo-users {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 420px) {
+  .login {
+    min-height: 100dvh;
+    padding: 10px;
+    place-items: start stretch;
+  }
+
+  .login-panel {
+    width: 100%;
+    min-height: calc(100dvh - 20px);
+    border-radius: 12px;
+  }
+
+  .login-copy {
+    padding: 20px;
+    gap: 13px;
+  }
+
+  .login-copy h1 {
+    font-size: 24px;
+    line-height: 1.15;
+  }
+
+  .login-copy p {
+    font-size: 13px;
+    line-height: 1.45;
+  }
+
+  .login-steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .login-steps span {
+    padding: 8px;
+    font-size: 12px;
+  }
+
+  .login-form {
+    padding: 20px;
+    gap: 12px;
+    align-content: start;
+  }
+
+  .login-form h2 {
+    font-size: 18px;
+  }
+
+  .demo-users {
+    grid-template-columns: 1fr;
+    gap: 7px;
+  }
+
+  .demo-users button {
+    min-height: 44px;
+    padding: 9px 11px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    text-align: left;
+  }
 }
 
 .shell {
@@ -1408,4 +1502,11 @@ tbody tr:hover td { background: #f9fbfd; }
   .hash-banner { align-items: stretch; flex-direction: column; }
   .table-tools > select,
   .search-box { max-width: none; }
+}
+
+@media (max-width: 420px) {
+  .login-copy,
+  .login-form {
+    padding: 20px;
+  }
 }
