@@ -75,8 +75,12 @@ export function Inventory({ data }) {
 function InventoryFilterBar({ filters, setFilters, items, infrastructures, includeSearch = true }) {
   return (
     <div className="panel compact-filter-panel">
+      {includeSearch ? (
+        <div className="filter-search-row">
+          <SearchBox value={filters.query || ""} onChange={(query) => setFilters({ ...filters, query })} placeholder="Search item, document, person" />
+        </div>
+      ) : null}
       <div className="table-tools filter-grid">
-        {includeSearch ? <SearchBox value={filters.query || ""} onChange={(query) => setFilters({ ...filters, query })} placeholder="Search item, document, person" /> : null}
         <label>Item <select value={filters.itemId || ""} onChange={(e) => setFilters({ ...filters, itemId: e.target.value })}><option value="">All items</option>{items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>Key Infrastructure <select value={filters.infrastructureId || ""} onChange={(e) => setFilters({ ...filters, infrastructureId: e.target.value })}><option value="">All locations</option><option value="store">Store / Not Assigned</option>{infrastructures.map((infra) => <option key={infra.id} value={infra.id}>{infra.name}</option>)}</select></label>
         <label>From <input type="date" value={filters.dateFrom || ""} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></label>
@@ -301,5 +305,4 @@ function LifecycleLedgerTable({ events = [], infrastructures = [], receipts = []
     </div>
   );
 }
-
 

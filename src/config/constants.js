@@ -50,7 +50,7 @@ export const demoUsers = {
 export const roleLabels = {
   admin: "Admin",
   requester: "Requisition",
-  store: "Store / PMU",
+  store: "Store / PIU",
   approver: "Final Approver"
 };
 
@@ -81,4 +81,3 @@ export function viewAllowed(user, view) {
 export function firstAllowedView(user) {
   return ["dashboard", "requisitions", "approvals", "receive", "inventory", "issue", "projects", "reports", "audit"].find((entry) => viewAllowed(user, entry)) || "requisitions";
 }
-

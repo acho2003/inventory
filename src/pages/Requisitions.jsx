@@ -99,6 +99,7 @@ function ApprovalStatusPanel({ requisitions, receipts }) {
 function RequisitionProgressCard({ row, receipts }) {
   const orderedQty = (row.lines || []).reduce((sum, line) => sum + Number(line.quantity || 0), 0);
   const receivedQty = (row.lines || []).reduce((sum, line) => sum + requisitionReceivedQty(receipts, row.id, line.itemId), 0);
+  const remainingQty = Math.max(0, orderedQty - receivedQty);
   return (
     <div className="request-card progress-card">
       <div>
@@ -107,7 +108,7 @@ function RequisitionProgressCard({ row, receipts }) {
       </div>
       <div className="progress-side">
         <span className={`status ${row.status}`}>{statusLabels[row.status] || row.status}</span>
-        <small>{num(receivedQty)} / {num(orderedQty)} received</small>
+        <small>Received {num(receivedQty)} / {num(orderedQty)} | To receive {num(remainingQty)}</small>
       </div>
     </div>
   );
@@ -142,6 +143,7 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
             {filtered.map((r) => {
               const orderedQty = (r.lines || []).reduce((sum, line) => sum + Number(line.quantity || 0), 0);
               const receivedQty = (r.lines || []).reduce((sum, line) => sum + requisitionReceivedQty(receipts, r.id, line.itemId), 0);
+              const remainingQty = Math.max(0, orderedQty - receivedQty);
               return (
                 <tr key={r.id}>
                   <td><strong>{fmt(r.requisitionNo)}</strong></td>
@@ -151,7 +153,10 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
                     {r.status === "REJECTED" && r.rejectionReason ? <div className="rejection-note compact">Reason: {r.rejectionReason}</div> : null}
                   </td>
                   <td>{compact ? num(r.lines?.length || 0) : r.lines?.map((l) => <div key={l.id || `${l.itemName}-${l.quantity}`}>{l.itemName} ({num(l.quantity)} {l.unit})</div>)}</td>
-                  <td>{num(receivedQty)} / {num(orderedQty)}</td>
+                  <td>
+                    <strong>{num(receivedQty)} / {num(orderedQty)}</strong>
+                    <div className="muted">To receive: {num(remainingQty)}</div>
+                  </td>
                   <td>{fmt(r.purpose)}</td>
                   <td>{fmt(r.supplyOrderNo)}</td>
                 </tr>
@@ -164,5 +169,4 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
     </>
   );
 }
-
 
