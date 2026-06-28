@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { FileDown } from "lucide-react";
 import { fmt, matchesSearch, num } from "../lib/utils.js";
-import { Header, PanelTitle, SearchBox } from "../components/common.jsx";
+import { Header, Kpi, PanelTitle, SearchBox } from "../components/common.jsx";
 
 export function AuditTrail({ data, token }) {
   const [query, setQuery] = useState("");
@@ -115,5 +116,4 @@ function AuditEventRow({ event }) {
     </tr>
   );
 }
-
 
