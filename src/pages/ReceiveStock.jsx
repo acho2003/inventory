@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { statusLabels } from "../config/constants.js";
 import { byId, fmt, lineCategory, num, today } from "../lib/utils.js";
 import { Header, PanelTitle } from "../components/common.jsx";
 import { LineEditor, blankLine } from "../components/forms.jsx";
@@ -85,5 +86,4 @@ export function ReceiveStock({ data, api, refresh, setView }) {
     </>
   );
 }
-
 
