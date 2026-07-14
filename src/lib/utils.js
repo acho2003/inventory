@@ -60,11 +60,13 @@ export function amountUsedFor(records = [], field, id) {
 
 
 
-export function requisitionReceivedQty(receipts = [], requisitionId, itemId) {
+export function requisitionReceivedQty(receipts = [], requisitionId, itemId, requisitionLineId = "") {
   return receipts
     .filter((receipt) => receipt.requisitionId === requisitionId)
     .reduce((sum, receipt) => sum + (receipt.lines || [])
-      .filter((line) => line.itemId === itemId)
+      .filter((line) => requisitionLineId
+        ? line.requisitionLineId === requisitionLineId || (!line.requisitionLineId && line.itemId === itemId)
+        : line.itemId === itemId)
       .reduce((lineSum, line) => lineSum + Number(line.quantity || 0), 0), 0);
 }
 
@@ -112,5 +114,4 @@ export function infrastructureUsageRows(data) {
     };
   });
 }
-
 

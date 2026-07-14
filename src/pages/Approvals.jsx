@@ -102,12 +102,13 @@ function OrderedItemsTable({ lines }) {
   return (
     <div className="table-wrap compact-table">
       <table>
-        <thead><tr><th>Item</th><th>Category</th><th>Qty</th><th>Unit</th><th>Remarks</th></tr></thead>
+        <thead><tr><th>Item</th><th>Category</th><th>Specification</th><th>Qty</th><th>Unit</th><th>Remarks</th></tr></thead>
         <tbody>
           {lines.map((line) => (
             <tr key={line.id || `${line.itemName}-${line.quantity}`}>
               <td><strong>{line.itemName}</strong></td>
               <td>{fmt(lineCategory(line))}</td>
+              <td>{fmt(line.specification)}</td>
               <td>{num(line.quantity)}</td>
               <td>{fmt(line.unit)}</td>
               <td>{fmt(line.remarks)}</td>
@@ -118,5 +119,4 @@ function OrderedItemsTable({ lines }) {
     </div>
   );
 }
-
 

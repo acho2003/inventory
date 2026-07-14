@@ -38,9 +38,11 @@ export function ReceiveStock({ data, api, refresh, setView }) {
       infrastructureId: req.infrastructureId || ""
     });
     setLines((req.lines || []).map((line) => ({
+      itemId: line.itemId,
       itemName: line.itemName,
+      requisitionLineId: line.id,
       category: lineCategory(line),
-      specification: lineCategory(line),
+      specification: line.specification || "",
       quantity: line.quantity,
       unit: line.unit,
       remarks: line.remarks || "",
@@ -86,4 +88,3 @@ export function ReceiveStock({ data, api, refresh, setView }) {
     </>
   );
 }
-

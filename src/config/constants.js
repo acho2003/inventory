@@ -10,7 +10,7 @@ export const statusLabels = {
   IMPORTED_FOLLOW_UP: "Imported follow-up"
 };
 
-export const APP_NAME = "Yarju_OAP_inventory";
+export const APP_NAME = "Yarju OAP Inventory";
 
 export const stockEventTypes = {
   TRANSFER: "Transfer",

@@ -130,28 +130,38 @@ export function App() {
     <section className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <strong>{APP_NAME}</strong>
-          <span>Materials and stock control</span>
-        </div>
-        <div className="userbox">
-          <div className="avatar">{user.name.slice(0, 1)}</div>
           <div>
-            <strong>{user.name}</strong>
-            <span>{roleLabels[user.role] || user.role}</span>
+            <Boxes size={20} />
           </div>
+          <span>
+            <strong>Yarju OAP</strong>
+            <small>Inventory control</small>
+          </span>
         </div>
-        <nav className="nav">
-          {navItems.filter((item) => item[3]).map(([id, label, Icon]) => (
-            <button key={id} className={view === id ? "active" : ""} onClick={() => changeView(id)}>
-              <Icon size={17} />
-              <span>{label}</span>
-            </button>
-          ))}
-        </nav>
-        <button className="sidebar-action" onClick={() => { localStorage.removeItem("yarju_token"); setToken(""); setUser(null); }}>
-          <LogOut size={16} />
-          <span>Sign out</span>
-        </button>
+        <div className="sidebar-nav-group">
+          <span className="nav-label">Workspace</span>
+          <nav className="nav">
+            {navItems.filter((item) => item[3]).map(([id, label, Icon]) => (
+              <button key={id} className={view === id ? "active" : ""} onClick={() => changeView(id)}>
+                <Icon size={17} />
+                <span>{label}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
+        <div className="sidebar-footer">
+          <div className="userbox">
+            <div className="avatar">{user.name.slice(0, 1)}</div>
+            <div>
+              <strong>{user.name}</strong>
+              <span>{roleLabels[user.role] || user.role}</span>
+            </div>
+          </div>
+          <button className="sidebar-action" onClick={() => { localStorage.removeItem("yarju_token"); setToken(""); setUser(null); }}>
+            <LogOut size={16} />
+            <span>Sign out</span>
+          </button>
+        </div>
       </aside>
       <main className="content">
         <CurrentView view={view} user={user} data={data} api={api} refresh={refresh} setView={setView} token={token} />
@@ -174,5 +184,4 @@ function CurrentView(props) {
   if (props.view === "reports") return <Reports {...props} />;
   if (props.view === "audit") return <AuditTrail {...props} />;
 }
-
 

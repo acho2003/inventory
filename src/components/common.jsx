@@ -10,6 +10,10 @@ export function Header({ title, subtitle, eyebrow }) {
         <h1>{title}</h1>
         {subtitle ? <div className="muted">{subtitle}</div> : null}
       </div>
+      <div className="workspace-status">
+        <span />
+        Live workspace
+      </div>
     </div>
   );
 }
@@ -26,9 +30,15 @@ export function AccessDenied() {
 
 
 
-export function Kpi({ label, value }) {
+export function Kpi({ label, value, hint, tone = "forest" }) {
   const display = typeof value === "number" || (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) ? num(value) : fmt(value);
-  return <div className="kpi"><span>{label}</span><strong>{display}</strong></div>;
+  return (
+    <div className={`kpi kpi-${tone}`}>
+      <div className="kpi-label"><i />{label}</div>
+      <strong>{display}</strong>
+      {hint ? <small>{hint}</small> : null}
+    </div>
+  );
 }
 
 
@@ -190,5 +200,4 @@ export function SearchBox({ value, onChange, placeholder }) {
     </label>
   );
 }
-
 

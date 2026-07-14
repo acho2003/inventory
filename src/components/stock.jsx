@@ -95,13 +95,14 @@ export function IssueHistoryTable({ issues = [] }) {
       <div className="table-tools"><SearchBox value={query} onChange={setQuery} placeholder="Search issue history" /></div>
       <div className="table-wrap">
         <table>
-          <thead><tr><th>Date</th><th>Issue Challan</th><th>Duty Person</th><th>Items</th><th>Remarks</th></tr></thead>
+          <thead><tr><th>Date</th><th>Issue Challan</th><th>Duty Person</th><th>Items</th><th>Specification</th><th>Remarks</th></tr></thead>
           <tbody>{rows.map((issue) => (
             <tr key={issue.id}>
               <td>{fmt(issue.date)}</td>
               <td>{fmt(issue.issueChallanNo)}</td>
               <td>{fmt(issue.issuedTo)}</td>
               <td>{(issue.lines || []).map((line) => <div key={line.id || `${line.itemName}-${line.quantity}`}>{fmt(line.itemName)} ({num(line.quantity)} {fmt(line.unit)})</div>)}</td>
+              <td>{(issue.lines || []).map((line) => <div key={line.id || `${line.itemName}-${line.quantity}`}>{fmt(line.specification)}</div>)}</td>
               <td>{fmt(issue.remarks)}</td>
             </tr>
           ))}</tbody>
@@ -111,5 +112,4 @@ export function IssueHistoryTable({ issues = [] }) {
     </>
   );
 }
-
 

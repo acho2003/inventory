@@ -1,0 +1,69 @@
+[data-theme="yarju"] {
+  color-scheme: light;
+
+  --background: oklch(0.975 0.008 92);
+  --foreground: oklch(0.235 0.025 158);
+  --card: oklch(0.995 0.004 92);
+  --card-foreground: oklch(0.235 0.025 158);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.235 0.025 158);
+  --primary: oklch(0.35 0.075 158);
+  --primary-foreground: oklch(0.985 0.006 92);
+  --secondary: oklch(0.93 0.025 91);
+  --secondary-foreground: oklch(0.29 0.035 157);
+  --muted: oklch(0.945 0.012 91);
+  --muted-foreground: oklch(0.52 0.022 158);
+  --accent: oklch(0.73 0.135 72);
+  --accent-foreground: oklch(0.25 0.025 158);
+  --destructive: oklch(0.56 0.19 28);
+  --destructive-foreground: oklch(0.985 0 0);
+  --border: oklch(0.88 0.018 91);
+  --input: oklch(0.86 0.02 91);
+  --ring: oklch(0.52 0.1 157);
+
+  --chart-1: oklch(0.38 0.08 158);
+  --chart-2: oklch(0.72 0.13 72);
+  --chart-3: oklch(0.55 0.08 202);
+  --chart-4: oklch(0.67 0.12 126);
+  --chart-5: oklch(0.59 0.15 36);
+
+  --sidebar: oklch(0.255 0.045 158);
+  --sidebar-foreground: oklch(0.94 0.012 91);
+  --sidebar-primary: oklch(0.77 0.13 73);
+  --sidebar-primary-foreground: oklch(0.22 0.025 158);
+  --sidebar-accent: oklch(0.32 0.05 158);
+  --sidebar-accent-foreground: oklch(0.985 0.006 92);
+  --sidebar-border: oklch(0.39 0.045 158);
+  --sidebar-ring: oklch(0.72 0.13 72);
+
+  --font-sans: Inter, "Segoe UI", Arial, Helvetica, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --radius: 10px;
+  --radius-lg: 16px;
+  --shadow-xs: 0 1px 2px rgba(35, 47, 39, 0.04);
+  --shadow-sm: 0 8px 24px rgba(35, 47, 39, 0.06);
+  --shadow-md: 0 20px 50px rgba(35, 47, 39, 0.09);
+
+  /* Compatibility aliases used throughout the existing inventory views. */
+  --bg: var(--background);
+  --surface: var(--card);
+  --surface-soft: var(--muted);
+  --surface-tint: oklch(0.94 0.03 157);
+  --line: var(--border);
+  --line-strong: oklch(0.77 0.025 91);
+  --text: var(--foreground);
+  --muted-text: var(--muted-foreground);
+  --navy: var(--primary);
+  --navy-soft: oklch(0.92 0.03 157);
+  --accent-legacy: var(--accent);
+  --accent-strong: oklch(0.47 0.1 68);
+  --accent-soft: oklch(0.94 0.045 75);
+  --warn: oklch(0.48 0.12 64);
+  --warn-soft: oklch(0.95 0.05 78);
+  --danger: var(--destructive);
+  --danger-soft: oklch(0.95 0.04 28);
+  --ok: oklch(0.42 0.11 150);
+  --ok-soft: oklch(0.94 0.04 150);
+  --shadow: var(--shadow-md);
+  --shadow-soft: var(--shadow-sm);
+}

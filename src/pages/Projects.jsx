@@ -95,12 +95,11 @@ export function ProjectsPage({ user, data, api, refresh }) {
       <div className="panel">
         <PanelTitle title={selectedBudgetHead?.name || "Budget Head Detail"} subtitle="Ordered and issued items linked to the selected budget head through transactions." />
         <div className="detail-stack">
-          <DetailBlock title="Ordered Items" rows={ordered.flatMap((req) => (req.lines || []).map((line) => `${req.requisitionNo}: ${line.itemName} (${lineCategory(line) || "No category"}) - ${num(line.quantity)} ${line.unit}`)).slice(0, 12)} />
+          <DetailBlock title="Ordered Items" rows={ordered.flatMap((req) => (req.lines || []).map((line) => `${req.requisitionNo}: ${line.itemName}${line.specification ? ` — ${line.specification}` : ""} (${lineCategory(line) || "No category"}) - ${num(line.quantity)} ${line.unit}`)).slice(0, 12)} />
           <DetailBlock title="Issued Items" rows={ledgerRows.filter((row) => row.type === "ISSUE").map((row) => `${row.itemName} (${num(row.quantity)} ${row.unit})`).slice(0, 12)} />
         </div>
       </div>
     </>
   );
 }
-
 

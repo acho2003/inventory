@@ -48,7 +48,7 @@ export function LineEditor({ items, lines, setLines, receipt = false, arrival = 
       <div className="line-section-head">
         <div>
           <strong>Item lines</strong>
-          <span>Material description, quantity, unit, and remarks.</span>
+          <span>Material description, specification, quantity, unit, and remarks.</span>
         </div>
         <button type="button" className="soft-button" onClick={() => setLines([...lines, blankLine()])}>
           <Plus size={16} />
@@ -67,16 +67,16 @@ export function LineEditor({ items, lines, setLines, receipt = false, arrival = 
                 itemName: e.target.value,
                 itemId: item?.id || line.itemId || "",
                 category: item?.category || line.category,
-                specification: item?.category || line.specification,
                 unit: item?.unit || line.unit
               });
             }} required /></label>
             <label>Category
-              <select value={line.category ?? line.specification ?? ""} onChange={(e) => update(index, { category: e.target.value, specification: e.target.value })}>
+              <select value={line.category || ""} onChange={(e) => update(index, { category: e.target.value })}>
                 <option value="">Select category</option>
                 {itemCategories.map((category) => <option key={category} value={category}>{category}</option>)}
               </select>
             </label>
+            <label>Specification <input value={line.specification || ""} onChange={(e) => update(index, { specification: e.target.value })} placeholder="e.g. 200 Micrometer" /></label>
             <label>Qty <input type="number" step="0.01" min="0.01" value={line.quantity} onChange={(e) => update(index, { quantity: e.target.value })} required /></label>
             <label className="field-control">
               <span>Unit</span>
@@ -107,5 +107,4 @@ export function LineEditor({ items, lines, setLines, receipt = false, arrival = 
 export function blankLine() {
   return { itemName: "", category: "", specification: "", quantity: "", unit: "", remarks: "" };
 }
-
 

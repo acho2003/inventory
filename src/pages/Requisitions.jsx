@@ -98,7 +98,7 @@ function ApprovalStatusPanel({ requisitions, receipts }) {
 
 function RequisitionProgressCard({ row, receipts }) {
   const orderedQty = (row.lines || []).reduce((sum, line) => sum + Number(line.quantity || 0), 0);
-  const receivedQty = (row.lines || []).reduce((sum, line) => sum + requisitionReceivedQty(receipts, row.id, line.itemId), 0);
+  const receivedQty = (row.lines || []).reduce((sum, line) => sum + requisitionReceivedQty(receipts, row.id, line.itemId, line.id), 0);
   const remainingQty = Math.max(0, orderedQty - receivedQty);
   return (
     <div className="request-card progress-card">
@@ -121,7 +121,7 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
   const [status, setStatus] = useState("all");
   const filtered = rows.filter((r) => {
     const statusOk = status === "all" || r.status === status;
-    const queryOk = matchesSearch([r.requisitionNo, r.requestDate, r.status, r.purpose, r.supplyOrderNo, r.rejectionReason, ...(r.lines || []).map((line) => line.itemName)], query);
+    const queryOk = matchesSearch([r.requisitionNo, r.requestDate, r.status, r.purpose, r.supplyOrderNo, r.rejectionReason, ...(r.lines || []).flatMap((line) => [line.itemName, line.specification])], query);
     return statusOk && queryOk;
   });
   if (!rows.length) return <div className="empty">No requisitions found.</div>;
@@ -138,11 +138,11 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
       ) : null}
       <div className="table-wrap">
         <table>
-          <thead><tr><th>No</th><th>Date</th><th>Status</th><th>Items</th><th>Received</th><th>Purpose</th><th>Supply Order</th></tr></thead>
+          <thead><tr><th>No</th><th>Date</th><th>Status</th><th>Items</th><th>Specification</th><th>Received</th><th>Purpose</th><th>Supply Order</th></tr></thead>
           <tbody>
             {filtered.map((r) => {
               const orderedQty = (r.lines || []).reduce((sum, line) => sum + Number(line.quantity || 0), 0);
-              const receivedQty = (r.lines || []).reduce((sum, line) => sum + requisitionReceivedQty(receipts, r.id, line.itemId), 0);
+              const receivedQty = (r.lines || []).reduce((sum, line) => sum + requisitionReceivedQty(receipts, r.id, line.itemId, line.id), 0);
               const remainingQty = Math.max(0, orderedQty - receivedQty);
               return (
                 <tr key={r.id}>
@@ -153,6 +153,7 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
                     {r.status === "REJECTED" && r.rejectionReason ? <div className="rejection-note compact">Reason: {r.rejectionReason}</div> : null}
                   </td>
                   <td>{compact ? num(r.lines?.length || 0) : r.lines?.map((l) => <div key={l.id || `${l.itemName}-${l.quantity}`}>{l.itemName} ({num(l.quantity)} {l.unit})</div>)}</td>
+                  <td>{compact ? "-" : r.lines?.map((l) => <div key={l.id || `${l.itemName}-${l.quantity}`}>{fmt(l.specification)}</div>)}</td>
                   <td>
                     <strong>{num(receivedQty)} / {num(orderedQty)}</strong>
                     <div className="muted">To receive: {num(remainingQty)}</div>
@@ -169,4 +170,3 @@ function RequisitionTable({ rows, receipts = [], compact = false }) {
     </>
   );
 }
-

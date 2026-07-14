@@ -2,7 +2,7 @@
   "meta": {
     "name": "Yarju_OAP_inventory",
     "createdAt": "2026-06-23T17:07:43.072Z",
-    "updatedAt": "2026-06-23T17:07:43.072Z",
+    "updatedAt": "2026-07-14T17:06:46.157Z",
     "resetAt": "2026-06-23T17:07:43.072Z",
     "resetNote": "Reset database and cleared all application records except users."
   },
@@ -46,7 +46,119 @@
   "ledger": [],
   "expenses": [],
   "stockEvents": [],
-  "auditEvents": [],
+  "auditEvents": [
+    {
+      "id": "AUD-00001",
+      "at": "2026-07-14T16:53:01.314Z",
+      "actorId": "u-admin",
+      "actorName": "Administrator",
+      "actorRole": "admin",
+      "eventType": "LOGIN_SUCCESS",
+      "entityType": "auth",
+      "entityId": "u-admin",
+      "entityLabel": "admin",
+      "before": null,
+      "after": {
+        "username": "admin",
+        "role": "admin"
+      },
+      "changes": {
+        "username": {
+          "before": null,
+          "after": "admin"
+        },
+        "role": {
+          "before": null,
+          "after": "admin"
+        }
+      },
+      "reason": "",
+      "remarks": "",
+      "documentNo": "",
+      "linkedLedgerIds": [],
+      "linkedRequisitionId": "",
+      "linkedReceiptId": "",
+      "linkedIssueId": "",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.127.0 Chrome/148.0.7778.97 Electron/42.2.0 Safari/537.36",
+      "previousHash": "",
+      "hash": "c1b4ee8a172df5f99085e455c4215cbdd88cc25e8dc397a95619aca39ff3280a"
+    },
+    {
+      "id": "AUD-00002",
+      "at": "2026-07-14T17:06:20.948Z",
+      "actorId": "u-admin",
+      "actorName": "Administrator",
+      "actorRole": "admin",
+      "eventType": "LOGIN_SUCCESS",
+      "entityType": "auth",
+      "entityId": "u-admin",
+      "entityLabel": "admin",
+      "before": null,
+      "after": {
+        "username": "admin",
+        "role": "admin"
+      },
+      "changes": {
+        "username": {
+          "before": null,
+          "after": "admin"
+        },
+        "role": {
+          "before": null,
+          "after": "admin"
+        }
+      },
+      "reason": "",
+      "remarks": "",
+      "documentNo": "",
+      "linkedLedgerIds": [],
+      "linkedRequisitionId": "",
+      "linkedReceiptId": "",
+      "linkedIssueId": "",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.127.0 Chrome/148.0.7778.97 Electron/42.2.0 Safari/537.36",
+      "previousHash": "c1b4ee8a172df5f99085e455c4215cbdd88cc25e8dc397a95619aca39ff3280a",
+      "hash": "ac044a2fb03bab32b9dc4a2c8c937727c87dce713a14f3511eb5a8182fba72d4"
+    },
+    {
+      "id": "AUD-00003",
+      "at": "2026-07-14T17:06:46.157Z",
+      "actorId": "u-admin",
+      "actorName": "Administrator",
+      "actorRole": "admin",
+      "eventType": "LOGIN_SUCCESS",
+      "entityType": "auth",
+      "entityId": "u-admin",
+      "entityLabel": "admin",
+      "before": null,
+      "after": {
+        "username": "admin",
+        "role": "admin"
+      },
+      "changes": {
+        "username": {
+          "before": null,
+          "after": "admin"
+        },
+        "role": {
+          "before": null,
+          "after": "admin"
+        }
+      },
+      "reason": "",
+      "remarks": "",
+      "documentNo": "",
+      "linkedLedgerIds": [],
+      "linkedRequisitionId": "",
+      "linkedReceiptId": "",
+      "linkedIssueId": "",
+      "ip": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+      "previousHash": "ac044a2fb03bab32b9dc4a2c8c937727c87dce713a14f3511eb5a8182fba72d4",
+      "hash": "a86f1cf92761a039030ca0bad9c49e00a18ee4a1b47bf4ff295322b3ed0373b7"
+    }
+  ],
   "counters": {
     "requisition": 1,
     "receipt": 1,
@@ -59,6 +171,6 @@
     "stockEvent": 1,
     "transfer": 1,
     "adjustment": 1,
-    "auditEvent": 1
+    "auditEvent": 4
   }
 }

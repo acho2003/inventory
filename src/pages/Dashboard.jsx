@@ -13,10 +13,10 @@ export function Dashboard({ data, user, api, refresh }) {
     <>
       <Header title="Dashboard" eyebrow="Operations overview" subtitle="Live status from requisitions, receipts, issues, and imported manual records." />
       <div className="kpis">
-        <Kpi label="Pending Store Verification" value={d.requisitions.pendingFirstApproval} />
-        <Kpi label="Pending Final Approval" value={d.requisitions.pendingFinalApproval} />
-        <Kpi label="Inventory Items" value={d.inventory.itemCount} />
-        <Kpi label="Low / Zero Stock" value={d.inventory.lowStock} />
+        <Kpi label="Store verification" value={d.requisitions.pendingFirstApproval} hint="Requests waiting in queue" tone="amber" />
+        <Kpi label="Final approval" value={d.requisitions.pendingFinalApproval} hint="Ready for approver review" tone="blue" />
+        <Kpi label="Inventory items" value={d.inventory.itemCount} hint="Tracked across all stores" tone="forest" />
+        <Kpi label="Low or zero stock" value={d.inventory.lowStock} hint="Items needing attention" tone="red" />
       </div>
       <WorkflowStrip />
       <div className="dashboard-overview-grid">
@@ -59,7 +59,7 @@ function OrderedItemFilter({ data }) {
   for (const line of orderedSource) {
     if (!dateInRange(line.date, dateFrom, dateTo)) continue;
     if (itemId && line.itemId !== itemId) continue;
-    const key = `${line.itemId || line.itemName}::${line.unit || ""}`;
+    const key = `${line.itemId || line.itemName}::${line.specification || ""}::${line.unit || ""}`;
     const current = rows.find((row) => row.key === key);
     if (current) {
       current.quantity += Number(line.quantity || 0);
@@ -68,6 +68,7 @@ function OrderedItemFilter({ data }) {
       rows.push({
         key,
         itemName: line.itemName || itemMap[line.itemId]?.name || "Item",
+        specification: line.specification || "",
         unit: line.unit || itemMap[line.itemId]?.unit || "",
         quantity: Number(line.quantity || 0),
         requests: 1
@@ -88,8 +89,8 @@ function OrderedItemFilter({ data }) {
       {rows.length ? (
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Item</th><th>Ordered Quantity</th><th>Unit</th><th>Requisition Lines</th></tr></thead>
-            <tbody>{rows.map((row) => <tr key={row.key}><td><strong>{fmt(row.itemName)}</strong></td><td>{num(row.quantity)}</td><td>{fmt(row.unit)}</td><td>{num(row.requests)}</td></tr>)}</tbody>
+            <thead><tr><th>Item</th><th>Specification</th><th>Ordered Quantity</th><th>Unit</th><th>Requisition Lines</th></tr></thead>
+            <tbody>{rows.map((row) => <tr key={row.key}><td><strong>{fmt(row.itemName)}</strong></td><td>{fmt(row.specification)}</td><td>{num(row.quantity)}</td><td>{fmt(row.unit)}</td><td>{num(row.requests)}</td></tr>)}</tbody>
           </table>
         </div>
       ) : <div className="empty compact-empty">No matching requisition items.</div>}
@@ -214,5 +215,3 @@ function AdminCrudPanel({ data, api, refresh }) {
     </div>
   );
 }
-
-

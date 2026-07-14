@@ -624,11 +624,13 @@ function availableQty(store, itemId, infrastructureId = "") {
     .reduce((sum, entry) => sum + Number(entry.balance || 0), 0);
 }
 
-function receivedQtyForRequisition(store, requisitionId, itemId) {
+function receivedQtyForRequisition(store, requisitionId, itemId, requisitionLineId = "") {
   return store.receipts
     .filter((receipt) => receipt.requisitionId === requisitionId)
     .reduce((sum, receipt) => sum + (receipt.lines || [])
-      .filter((line) => line.itemId === itemId)
+      .filter((line) => requisitionLineId
+        ? line.requisitionLineId === requisitionLineId || (!line.requisitionLineId && line.itemId === itemId)
+        : line.itemId === itemId)
       .reduce((lineSum, line) => lineSum + Number(line.quantity || 0), 0), 0);
 }
 
@@ -697,6 +699,7 @@ function orderedItemRows(store) {
         date,
         itemId: line.itemId || "",
         itemName: line.itemName || "Item",
+        specification: line.specification || "",
         quantity: Number(line.quantity || 0),
         unit: line.unit || ""
       });
@@ -1126,8 +1129,8 @@ async function routeApi(req, res, pathname) {
         id: `rl-${crypto.randomUUID().slice(0, 8)}`,
         itemId: item.id,
         itemName: item.name,
-        category: normalizeText(line.category || line.specification),
-        specification: normalizeText(line.category || line.specification),
+        category: normalizeText(line.category),
+        specification: normalizeText(line.specification),
         quantity: qtyNumber(line.quantity),
         unit: normalizeText(line.unit || item.unit),
         issuedTillDate: Number(line.issuedTillDate || 0),
@@ -1464,8 +1467,9 @@ async function routeApi(req, res, pathname) {
         id: `rli-${crypto.randomUUID().slice(0, 8)}`,
         itemId: item.id,
         itemName: item.name,
-        category: normalizeText(line.category || line.specification),
-        specification: normalizeText(line.category || line.specification),
+        requisitionLineId: normalizeText(line.requisitionLineId),
+        category: normalizeText(line.category),
+        specification: normalizeText(line.specification),
         quantity,
         unit,
         rate: Number(line.rate || 0),
@@ -1499,7 +1503,7 @@ async function routeApi(req, res, pathname) {
     if (requisition) {
       const allReceived = (requisition.lines || []).every((line) => {
         const ordered = Number(line.quantity || 0);
-        return ordered > 0 && receivedQtyForRequisition(store, requisition.id, line.itemId) >= ordered;
+        return ordered > 0 && receivedQtyForRequisition(store, requisition.id, line.itemId, line.id) >= ordered;
       });
       requisition.status = allReceived ? "RECEIVED" : "PARTIALLY_RECEIVED";
       requisition.receipts = [...(requisition.receipts || []), receipt.id];
@@ -1583,13 +1587,13 @@ async function routeApi(req, res, pathname) {
         return sendError(res, 400, `Insufficient store stock for ${item.name}. Store available: ${storeAvailable} ${item.unit}. Total stock: ${totalAvailable} ${item.unit}.`);
       }
       const unit = normalizeText(item.unit || line.unit);
-      const category = normalizeText(item.category || line.category || line.specification);
+      const category = normalizeText(line.category || item.category);
       issue.lines.push({
         id: `ili-${crypto.randomUUID().slice(0, 8)}`,
         itemId: item.id,
         itemName: item.name,
         category,
-        specification: category,
+        specification: normalizeText(line.specification),
         quantity,
         unit,
         remarks: normalizeText(line.remarks)
