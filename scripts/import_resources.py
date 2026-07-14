@@ -15,10 +15,11 @@ STORE = ROOT / "data" / "store.json"
 
 def default_users() -> list[dict[str, str]]:
     return [
-        {"id": "u-admin", "username": "admin", "password": "admin123", "name": "Administrator", "role": "admin"},
-        {"id": "u-requester", "username": "requester", "password": "request123", "name": "Requisition User", "role": "requester"},
-        {"id": "u-store", "username": "store", "password": "store123", "name": "Store / PMU Officer", "role": "store"},
-        {"id": "u-approver", "username": "approver", "password": "approve123", "name": "Final Approver", "role": "approver"},
+        {"id": "u-piu-yarju", "username": "piuyarju@gmail.com", "passwordHash": "scrypt$37f8fbed50c1e4e256067dc951493a71$3f71e8e5d3d8d1046dd8d500d7711683107e5f19d014ad8993c67951aed93e8b0bd6e6432541afe5d2d19abcb36a4c6e5e7f03aa73aa69188ee057ad6e8650b2", "name": "PIU Yarju", "role": "requester"},
+        {"id": "u-pmu-yarju", "username": "pmuyarju@gmail.com", "passwordHash": "scrypt$a456e45208f73e7fc528669c1092f9cb$51d132c78c3ab96b7caa99d52bff89362919fbfcd5241e3abfd4c2d6e17bad660e739dff9cbc436d8cd82271f067c6401e6a4f0e44234c45108ba9cf3f22eff2", "name": "PMU Yarju", "role": "approver"},
+        {"id": "u-store-yarju", "username": "storeyarju@gmail.com", "passwordHash": "scrypt$f89645ba5cf4c5215400852b41d92558$4ffbb4be97e40aaeacdb96451da491abe7cfadba55554e11517044f42513da0a1f16c4767eac208f657338a135cfa5acd5c11eda83ae1304773945333b41b56b", "name": "Yarju Store", "role": "store"},
+        {"id": "u-oc-yarju", "username": "ocyarju@gmail.com", "passwordHash": "scrypt$f7cb53f84b2f21ed643a645bfa684f91$80c43bd8ec1d62d400b4819b911ade8b47be8477b5b96f7920f278ead5db1310dd30471b4088142a4a9b4ab49536782bc50404350b75476c928456bc3dd65ef1", "name": "OC Yarju", "role": "admin"},
+        {"id": "u-acc-yarju", "username": "accyarju@gmail.com", "passwordHash": "scrypt$3b7f3c071b43b7924348e05f645de00f$8b298270fcd7c695f08e2b62834f1d31de73d220ba27011b3aade1a67354759c8c124dbe894211ef2515752659b3791bd2a02cc3d7b215f02ef536d74b2860e9", "name": "ACC Yarju", "role": "store"},
     ]
 
 
@@ -54,7 +55,7 @@ def load_store() -> dict[str, Any]:
     if STORE.exists():
         return json.loads(STORE.read_text(encoding="utf-8"))
     return {
-        "meta": {"name": "Yarju_OAP_inventory", "createdAt": datetime.utcnow().isoformat()},
+        "meta": {"name": "Yarju OAP Inventory", "createdAt": datetime.utcnow().isoformat()},
         "users": default_users(),
         "projects": [],
         "budgetHeads": [],

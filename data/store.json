@@ -1,39 +1,46 @@
 {
   "meta": {
-    "name": "Yarju_OAP_inventory",
-    "createdAt": "2026-06-23T17:07:43.072Z",
-    "updatedAt": "2026-07-14T17:06:46.157Z",
-    "resetAt": "2026-06-23T17:07:43.072Z",
-    "resetNote": "Reset database and cleared all application records except users."
+    "name": "Yarju OAP Inventory",
+    "createdAt": "2026-07-14T18:06:14.000Z",
+    "updatedAt": "2026-07-14T18:06:14.000Z",
+    "resetAt": "2026-07-14T18:06:14.000Z",
+    "resetNote": "Cleared all operational records and replaced test accounts with Yarju operational accounts."
   },
   "users": [
     {
-      "id": "u-requester",
-      "username": "requester",
-      "password": "request123",
-      "name": "Requisition User",
+      "id": "u-piu-yarju",
+      "username": "piuyarju@gmail.com",
+      "passwordHash": "scrypt$37f8fbed50c1e4e256067dc951493a71$3f71e8e5d3d8d1046dd8d500d7711683107e5f19d014ad8993c67951aed93e8b0bd6e6432541afe5d2d19abcb36a4c6e5e7f03aa73aa69188ee057ad6e8650b2",
+      "name": "PIU Yarju",
       "role": "requester"
     },
     {
-      "id": "u-store",
-      "username": "store",
-      "password": "store123",
-      "name": "Store / PMU Officer",
-      "role": "store"
-    },
-    {
-      "id": "u-approver",
-      "username": "approver",
-      "password": "approve123",
-      "name": "Final Approver",
+      "id": "u-pmu-yarju",
+      "username": "pmuyarju@gmail.com",
+      "passwordHash": "scrypt$a456e45208f73e7fc528669c1092f9cb$51d132c78c3ab96b7caa99d52bff89362919fbfcd5241e3abfd4c2d6e17bad660e739dff9cbc436d8cd82271f067c6401e6a4f0e44234c45108ba9cf3f22eff2",
+      "name": "PMU Yarju",
       "role": "approver"
     },
     {
-      "id": "u-admin",
-      "username": "admin",
-      "password": "admin123",
-      "name": "Administrator",
+      "id": "u-store-yarju",
+      "username": "storeyarju@gmail.com",
+      "passwordHash": "scrypt$f89645ba5cf4c5215400852b41d92558$4ffbb4be97e40aaeacdb96451da491abe7cfadba55554e11517044f42513da0a1f16c4767eac208f657338a135cfa5acd5c11eda83ae1304773945333b41b56b",
+      "name": "Yarju Store",
+      "role": "store"
+    },
+    {
+      "id": "u-oc-yarju",
+      "username": "ocyarju@gmail.com",
+      "passwordHash": "scrypt$f7cb53f84b2f21ed643a645bfa684f91$80c43bd8ec1d62d400b4819b911ade8b47be8477b5b96f7920f278ead5db1310dd30471b4088142a4a9b4ab49536782bc50404350b75476c928456bc3dd65ef1",
+      "name": "OC Yarju",
       "role": "admin"
+    },
+    {
+      "id": "u-acc-yarju",
+      "username": "accyarju@gmail.com",
+      "passwordHash": "scrypt$3b7f3c071b43b7924348e05f645de00f$8b298270fcd7c695f08e2b62834f1d31de73d220ba27011b3aade1a67354759c8c124dbe894211ef2515752659b3791bd2a02cc3d7b215f02ef536d74b2860e9",
+      "name": "ACC Yarju",
+      "role": "store"
     }
   ],
   "projects": [],
@@ -46,119 +53,7 @@
   "ledger": [],
   "expenses": [],
   "stockEvents": [],
-  "auditEvents": [
-    {
-      "id": "AUD-00001",
-      "at": "2026-07-14T16:53:01.314Z",
-      "actorId": "u-admin",
-      "actorName": "Administrator",
-      "actorRole": "admin",
-      "eventType": "LOGIN_SUCCESS",
-      "entityType": "auth",
-      "entityId": "u-admin",
-      "entityLabel": "admin",
-      "before": null,
-      "after": {
-        "username": "admin",
-        "role": "admin"
-      },
-      "changes": {
-        "username": {
-          "before": null,
-          "after": "admin"
-        },
-        "role": {
-          "before": null,
-          "after": "admin"
-        }
-      },
-      "reason": "",
-      "remarks": "",
-      "documentNo": "",
-      "linkedLedgerIds": [],
-      "linkedRequisitionId": "",
-      "linkedReceiptId": "",
-      "linkedIssueId": "",
-      "ip": "127.0.0.1",
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.127.0 Chrome/148.0.7778.97 Electron/42.2.0 Safari/537.36",
-      "previousHash": "",
-      "hash": "c1b4ee8a172df5f99085e455c4215cbdd88cc25e8dc397a95619aca39ff3280a"
-    },
-    {
-      "id": "AUD-00002",
-      "at": "2026-07-14T17:06:20.948Z",
-      "actorId": "u-admin",
-      "actorName": "Administrator",
-      "actorRole": "admin",
-      "eventType": "LOGIN_SUCCESS",
-      "entityType": "auth",
-      "entityId": "u-admin",
-      "entityLabel": "admin",
-      "before": null,
-      "after": {
-        "username": "admin",
-        "role": "admin"
-      },
-      "changes": {
-        "username": {
-          "before": null,
-          "after": "admin"
-        },
-        "role": {
-          "before": null,
-          "after": "admin"
-        }
-      },
-      "reason": "",
-      "remarks": "",
-      "documentNo": "",
-      "linkedLedgerIds": [],
-      "linkedRequisitionId": "",
-      "linkedReceiptId": "",
-      "linkedIssueId": "",
-      "ip": "127.0.0.1",
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.127.0 Chrome/148.0.7778.97 Electron/42.2.0 Safari/537.36",
-      "previousHash": "c1b4ee8a172df5f99085e455c4215cbdd88cc25e8dc397a95619aca39ff3280a",
-      "hash": "ac044a2fb03bab32b9dc4a2c8c937727c87dce713a14f3511eb5a8182fba72d4"
-    },
-    {
-      "id": "AUD-00003",
-      "at": "2026-07-14T17:06:46.157Z",
-      "actorId": "u-admin",
-      "actorName": "Administrator",
-      "actorRole": "admin",
-      "eventType": "LOGIN_SUCCESS",
-      "entityType": "auth",
-      "entityId": "u-admin",
-      "entityLabel": "admin",
-      "before": null,
-      "after": {
-        "username": "admin",
-        "role": "admin"
-      },
-      "changes": {
-        "username": {
-          "before": null,
-          "after": "admin"
-        },
-        "role": {
-          "before": null,
-          "after": "admin"
-        }
-      },
-      "reason": "",
-      "remarks": "",
-      "documentNo": "",
-      "linkedLedgerIds": [],
-      "linkedRequisitionId": "",
-      "linkedReceiptId": "",
-      "linkedIssueId": "",
-      "ip": "127.0.0.1",
-      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-      "previousHash": "ac044a2fb03bab32b9dc4a2c8c937727c87dce713a14f3511eb5a8182fba72d4",
-      "hash": "a86f1cf92761a039030ca0bad9c49e00a18ee4a1b47bf4ff295322b3ed0373b7"
-    }
-  ],
+  "auditEvents": [],
   "counters": {
     "requisition": 1,
     "receipt": 1,
@@ -171,6 +66,6 @@
     "stockEvent": 1,
     "transfer": 1,
     "adjustment": 1,
-    "auditEvent": 4
+    "auditEvent": 1
   }
 }

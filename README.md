@@ -1,4 +1,4 @@
-# Yarju_OAP_inventory
+# Yarju OAP Inventory
 
 An inventory and requisition system built from the manual Excel/Word records.
 
@@ -51,13 +51,17 @@ Read [docs/render-deployment.md](C:/Users/a/Documents/gimms/docs/render-deployme
 
 For access from other devices on the network, open `http://192.168.8.8:3000`.
 
-## Demo Users
+## Operational Accounts
 
-| Username | Password | Role |
-| --- | --- | --- |
-| `requester` | `request123` | Creates and tracks requisitions |
-| `store` | `store123` | First approval, order placement, stock receipt, stock issue |
-| `approver` | `approve123` | Final approval |
+The system uses individually assigned Yarju email accounts. Passwords are stored as salted hashes and are not documented in the repository.
+
+| Account | Role |
+| --- | --- |
+| PIU Yarju | Creates and tracks requisitions |
+| PMU Yarju | Gives final approval |
+| Yarju Store | Verifies requests, places orders, receives stock, and issues stock |
+| ACC Yarju | Store operations |
+| OC Yarju | System administration |
 
 ## Workflow
 

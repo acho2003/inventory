@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { APP_NAME, demoUsers, roleLabels } from "../config/constants.js";
+import { APP_NAME } from "../config/constants.js";
 
 export function Login({ onLogin }) {
   const [error, setError] = useState("");
@@ -10,15 +10,6 @@ export function Login({ onLogin }) {
     setError("");
     try {
       await onLogin(form.username, form.password);
-    } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function demoLogin(key) {
-    setError("");
-    try {
-      await onLogin(...demoUsers[key]);
     } catch (err) {
       setError(err.message);
     }
@@ -40,24 +31,15 @@ export function Login({ onLogin }) {
         <form className="login-form" onSubmit={submit}>
           <div>
             <h2>Sign in</h2>
-            <p className="muted">Choose a demo role or enter credentials manually.</p>
+            <p className="muted">Enter your assigned Yarju account credentials.</p>
           </div>
-          <label>Username <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required /></label>
-          <label>Password <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></label>
+          <label>Email <input type="email" autoComplete="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required /></label>
+          <label>Password <input type="password" autoComplete="current-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></label>
           {error ? <div className="error">{error}</div> : null}
           <button className="primary" type="submit">Sign in</button>
-          <div className="demo-users">
-            {Object.keys(demoUsers).map((key) => (
-              <button key={key} type="button" onClick={() => demoLogin(key)}>
-                <strong>{roleLabels[key]}</strong>
-                <span>{demoUsers[key][0]}</span>
-              </button>
-            ))}
-          </div>
         </form>
       </div>
     </section>
   );
 }
-
 

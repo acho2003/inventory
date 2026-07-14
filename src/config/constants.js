@@ -40,18 +40,11 @@ export const itemCategories = [
   "Tax (GST)"
 ];
 
-export const demoUsers = {
-  admin: ["admin", "admin123"],
-  requester: ["requester", "request123"],
-  store: ["store", "store123"],
-  approver: ["approver", "approve123"]
-};
-
 export const roleLabels = {
-  admin: "Admin",
-  requester: "Requisition",
-  store: "Store / PIU",
-  approver: "Final Approver"
+  admin: "OC Administrator",
+  requester: "PIU Requisition",
+  store: "Store Operations",
+  approver: "PMU Final Approver"
 };
 
 export const viewPermissions = {
