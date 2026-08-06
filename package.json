@@ -21,9 +21,12 @@
     "@supabase/supabase-js": "^2.107.0",
     "@vitejs/plugin-react": "^6.0.2",
     "dotenv": "^17.4.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "lucide-react": "^1.17.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "write-excel-file": "^4.1.1"
   }
 }

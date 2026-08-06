@@ -2,9 +2,9 @@
   "meta": {
     "name": "Yarju OAP Inventory",
     "createdAt": "2026-07-14T18:06:14.000Z",
-    "updatedAt": "2026-07-14T18:06:14.000Z",
-    "resetAt": "2026-07-14T18:06:14.000Z",
-    "resetNote": "Cleared all operational records and replaced test accounts with Yarju operational accounts."
+    "updatedAt": "2026-07-15T11:34:32.000Z",
+    "resetAt": "2026-07-15T11:34:32.000Z",
+    "resetNote": "Cleared all non-user records and preserved all user accounts."
   },
   "users": [
     {

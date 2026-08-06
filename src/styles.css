@@ -716,6 +716,64 @@ h2 { margin-bottom: 8px; font-size: 17px; }
   font-size: 12px;
 }
 
+.approval-items-table table {
+  min-width: 1060px;
+}
+
+.rejected-line td,
+.rejected-line:hover td {
+  background: #fff5f5;
+}
+
+.line-review-history,
+.line-decision-control,
+.line-review-list {
+  display: grid;
+  gap: 6px;
+}
+
+.line-review-summary {
+  display: grid;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.line-review-summary small {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.line-review-summary.approved,
+.line-review-list .approved {
+  color: var(--ok);
+}
+
+.line-review-summary.rejected,
+.line-review-list .rejected {
+  color: var(--danger);
+}
+
+.line-decision-control {
+  min-width: 180px;
+}
+
+.requisition-line {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 7px;
+}
+
+.requisition-line.rejected > span {
+  color: var(--danger);
+  text-decoration: line-through;
+}
+
+.line-review-list span {
+  display: block;
+  font-size: 11px;
+}
+
 .table-tools {
   display: flex;
   gap: 10px;
@@ -1419,42 +1477,6 @@ tbody tr:hover td { background: oklch(0.96 0.015 91); }
   border-left: 4px solid var(--navy);
 }
 
-.grid.two.infrastructure-stock-grid {
-  grid-template-columns: minmax(0, 1.85fr) minmax(260px, 1fr);
-  align-items: start;
-}
-
-.recent-movement-table {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  background: #fff;
-}
-
-.recent-movement-table table {
-  width: 100%;
-  table-layout: fixed;
-}
-
-.recent-movement-table th,
-.recent-movement-table td {
-  padding: 9px 8px;
-  overflow-wrap: anywhere;
-  vertical-align: top;
-}
-
-.recent-movement-table th:nth-child(1) { width: 22%; }
-.recent-movement-table th:nth-child(2) { width: 24%; }
-.recent-movement-table th:nth-child(3) { width: 30%; }
-.recent-movement-table th:nth-child(4) { width: 24%; }
-
-.movement-type {
-  color: var(--navy);
-  font-size: 11px;
-  font-weight: 850;
-}
-
 .quantity-summary {
   display: grid;
   gap: 5px;
@@ -1468,6 +1490,22 @@ tbody tr:hover td { background: oklch(0.96 0.015 91); }
   margin: 0 0 8px;
   font-size: 14px;
   color: var(--navy);
+}
+
+.ledger-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ledger-export-actions {
+  flex: 0 0 auto;
+}
+
+.ledger-filter-summary {
+  margin-top: -5px;
+  font-size: 12px;
 }
 
 .check-label {
@@ -1578,7 +1616,7 @@ tbody tr:hover td { background: oklch(0.96 0.015 91); }
   .audit-tools,
   .approval-timeline { grid-template-columns: 1fr 1fr; }
   .ledger-history-grid { grid-template-columns: 1fr; }
-  .grid.two.infrastructure-stock-grid { grid-template-columns: 1fr; }
+  .ledger-panel-heading { flex-direction: column; }
   .filter-grid { grid-template-columns: 1fr 1fr; }
   .line-row,
   .line-row.receipt-line,

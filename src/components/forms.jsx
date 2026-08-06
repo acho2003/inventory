@@ -26,7 +26,7 @@ export function InfrastructureSelect({ infrastructures, value, onChange, storeOp
 
 
 
-export function LineEditor({ items, lines, setLines, receipt = false, arrival = false, inventory = [] }) {
+export function LineEditor({ items, lines, setLines, receipt = false, arrival = false, inventory = [], fixedItems = false, allowAdd = true, allowRemove = true }) {
   function update(index, patch) {
     setLines(lines.map((line, i) => i === index ? { ...line, ...patch } : line));
   }
@@ -50,37 +50,39 @@ export function LineEditor({ items, lines, setLines, receipt = false, arrival = 
           <strong>Item lines</strong>
           <span>Material description, specification, quantity, unit, and remarks.</span>
         </div>
-        <button type="button" className="soft-button" onClick={() => setLines([...lines, blankLine()])}>
-          <Plus size={16} />
-          <span>Add item</span>
-        </button>
+        {allowAdd ? (
+          <button type="button" className="soft-button" onClick={() => setLines([...lines, blankLine()])}>
+            <Plus size={16} />
+            <span>Add item</span>
+          </button>
+        ) : null}
       </div>
       <datalist id="itemOptions">{items.map((item) => <option key={item.id} value={item.name} />)}</datalist>
       <div className="line-editor">
         {lines.map((line, index) => {
           const stockStats = inventory.length ? stockStatsForLine(line) : null;
           return (
-          <div className={`line-row ${receipt ? "receipt-line" : ""} ${stockStats ? "stock-line" : ""}`} key={index}>
+          <div className={`line-row ${receipt ? "receipt-line" : ""} ${stockStats ? "stock-line" : ""}`} key={line.id || index}>
             <label>Item <input list="itemOptions" value={line.itemName} onChange={(e) => {
               const item = matchItem(e.target.value);
               update(index, {
                 itemName: e.target.value,
-                itemId: item?.id || line.itemId || "",
+                itemId: item?.id || "",
                 category: item?.category || line.category,
                 unit: item?.unit || line.unit
               });
-            }} required /></label>
+            }} required disabled={fixedItems} /></label>
             <label>Category
-              <select value={line.category || ""} onChange={(e) => update(index, { category: e.target.value })}>
+              <select value={line.category || ""} onChange={(e) => update(index, { category: e.target.value })} disabled={fixedItems}>
                 <option value="">Select category</option>
                 {itemCategories.map((category) => <option key={category} value={category}>{category}</option>)}
               </select>
             </label>
-            <label>Specification <input value={line.specification || ""} onChange={(e) => update(index, { specification: e.target.value })} placeholder="e.g. 200 Micrometer" /></label>
-            <label>Qty <input type="number" step="0.01" min="0.01" value={line.quantity} onChange={(e) => update(index, { quantity: e.target.value })} required /></label>
+            <label>Specification <input value={line.specification || ""} onChange={(e) => update(index, { specification: e.target.value })} placeholder="e.g. 200 Micrometer" disabled={fixedItems} /></label>
+            <label>Qty <input type="number" step="0.01" min="0.01" max={line.maxQuantity || undefined} value={line.quantity} onChange={(e) => update(index, { quantity: e.target.value })} required /></label>
             <label className="field-control">
               <span>Unit</span>
-              <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} />
+              <input value={line.unit} onChange={(e) => update(index, { unit: e.target.value })} disabled={fixedItems} />
             </label>
             {stockStats ? <div className="stock-hint-cell"><span className="stock-hint">Store stock: {num(stockStats.store)} {line.unit}{stockStats.total !== stockStats.store ? ` | Total stock: ${num(stockStats.total)} ${line.unit}` : ""}</span></div> : null}
             {receipt ? <label>Rate <input type="number" step="0.01" min="0" value={line.rate || ""} onChange={(e) => {
@@ -91,9 +93,11 @@ export function LineEditor({ items, lines, setLines, receipt = false, arrival = 
             {receipt ? <label>Amount <input type="number" step="0.01" min="0" value={line.amount || ""} onChange={(e) => update(index, { amount: e.target.value })} /></label> : null}
             {arrival ? <label className="check-label">Arrived <input type="checkbox" checked={line.reached !== false} onChange={(e) => update(index, { reached: e.target.checked })} /></label> : null}
             <label>Remarks <input value={line.remarks} onChange={(e) => update(index, { remarks: e.target.value })} /></label>
-            <button type="button" className="icon-button" disabled={lines.length === 1} onClick={() => setLines(lines.filter((_, i) => i !== index))} title="Remove item line">
-              <Trash2 size={16} />
-            </button>
+            {allowRemove ? (
+              <button type="button" className="icon-button" disabled={lines.length === 1} onClick={() => setLines(lines.filter((_, i) => i !== index))} title="Remove item line">
+                <Trash2 size={16} />
+              </button>
+            ) : null}
           </div>
           );
         })}
@@ -107,4 +111,3 @@ export function LineEditor({ items, lines, setLines, receipt = false, arrival = 
 export function blankLine() {
   return { itemName: "", category: "", specification: "", quantity: "", unit: "", remarks: "" };
 }
-

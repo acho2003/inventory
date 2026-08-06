@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { statusLabels } from "../config/constants.js";
-import { byId, fmt, lineCategory, num, today } from "../lib/utils.js";
+import { byId, fmt, lineCategory, lineIsFinallyApproved, num, requisitionReceivedQty, today } from "../lib/utils.js";
 import { Header, PanelTitle } from "../components/common.jsx";
 import { LineEditor, blankLine } from "../components/forms.jsx";
 
@@ -8,7 +8,9 @@ export function ReceiveStock({ data, api, refresh, setView }) {
   const [form, setForm] = useState({ requisitionId: "", date: today(), budgetHeadId: "", infrastructureId: "", supplier: "", challanNo: "", challanDate: "", dvNo: "", dvDate: "", billNo: "", billDate: "", dispatchNo: "", remarks: "" });
   const [lines, setLines] = useState([blankLine()]);
   const [error, setError] = useState("");
-  const approved = data.requisitions.filter((r) => ["APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(r.status));
+  const approved = data.requisitions.filter((requisition) => ["APPROVED", "ORDERED", "PARTIALLY_RECEIVED"].includes(requisition.status)
+    && (requisition.lines || []).some((line) => lineIsFinallyApproved(line, requisition)
+      && requisitionReceivedQty(data.receipts, requisition.id, line.itemId, line.id) < Number(line.quantity || 0)));
   const budgetMap = byId(data.budgetHeads);
   const infrastructureMap = byId(data.infrastructures);
 
@@ -37,17 +39,22 @@ export function ReceiveStock({ data, api, refresh, setView }) {
       budgetHeadId: req.budgetHeadId || "",
       infrastructureId: req.infrastructureId || ""
     });
-    setLines((req.lines || []).map((line) => ({
+    setLines((req.lines || []).filter((line) => lineIsFinallyApproved(line, req)).map((line) => {
+      const received = requisitionReceivedQty(data.receipts, req.id, line.itemId, line.id);
+      const remaining = Math.max(0, Number(line.quantity || 0) - received);
+      return {
       itemId: line.itemId,
       itemName: line.itemName,
       requisitionLineId: line.id,
       category: lineCategory(line),
       specification: line.specification || "",
-      quantity: line.quantity,
+      quantity: remaining,
+      maxQuantity: remaining,
       unit: line.unit,
       remarks: line.remarks || "",
       reached: true
-    })));
+      };
+    }).filter((line) => Number(line.quantity || 0) > 0));
   }
 
   return (
@@ -81,7 +88,7 @@ export function ReceiveStock({ data, api, refresh, setView }) {
             <label>Dispatch No <input value={form.dispatchNo} onChange={(e) => setForm({ ...form, dispatchNo: e.target.value })} /></label>
           </div>
         </div>
-        <LineEditor items={data.items} lines={lines} setLines={setLines} receipt arrival />
+        <LineEditor items={data.items} lines={lines} setLines={setLines} receipt arrival fixedItems allowAdd={false} allowRemove={false} />
         <label>Remarks <textarea rows="2" value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} /></label>
         <button className="primary" type="submit">Record receipt</button>
       </form>

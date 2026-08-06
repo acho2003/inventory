@@ -31,6 +31,31 @@ export function lineSummary(lines = []) {
   return `${first.itemName || "Item"} (${num(first.quantity)} ${first.unit || ""})${suffix}`;
 }
 
+export function lineReview(line, stage) {
+  return line?.reviews?.[stage] || null;
+}
+
+export function lineIsRejected(line) {
+  return [lineReview(line, "store"), lineReview(line, "pmu")]
+    .some((review) => review?.decision === "REJECTED");
+}
+
+export function lineIsFinallyApproved(line, requisition) {
+  if (lineIsRejected(line)) return false;
+  const pmuReview = lineReview(line, "pmu");
+  if (pmuReview) return pmuReview.decision === "APPROVED";
+  const hasStructuredReview = Boolean(lineReview(line, "store"));
+  return !hasStructuredReview && ["APPROVED", "ORDERED", "PARTIALLY_RECEIVED", "RECEIVED", "CLOSED"].includes(requisition?.status);
+}
+
+export function requisitionProgressLines(requisition) {
+  const lines = requisition?.lines || [];
+  if (["APPROVED", "ORDERED", "PARTIALLY_RECEIVED", "RECEIVED", "CLOSED"].includes(requisition?.status)) {
+    return lines.filter((line) => lineIsFinallyApproved(line, requisition));
+  }
+  return lines.filter((line) => !lineIsRejected(line));
+}
+
 
 
 export function byId(rows = []) {
@@ -114,4 +139,3 @@ export function infrastructureUsageRows(data) {
     };
   });
 }
-

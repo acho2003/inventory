@@ -46,6 +46,7 @@ const rolePermissions = {
   requester: [
     "dashboard:read",
     "requisition:create",
+    "requisition:edit",
     "requisition:read",
     "budget:read",
     "infrastructure:read",
@@ -99,6 +100,7 @@ const rolePermissions = {
     "infrastructure:read",
     "item:read",
     "requisition:create",
+    "requisition:edit",
     "requisition:read",
     "requisition:first_approve",
     "requisition:final_approve",
@@ -622,13 +624,74 @@ function availableQty(store, itemId, infrastructureId = "") {
 }
 
 function receivedQtyForRequisition(store, requisitionId, itemId, requisitionLineId = "") {
-  return store.receipts
+  return activeRows(store.receipts)
     .filter((receipt) => receipt.requisitionId === requisitionId)
     .reduce((sum, receipt) => sum + (receipt.lines || [])
       .filter((line) => requisitionLineId
         ? line.requisitionLineId === requisitionLineId || (!line.requisitionLineId && line.itemId === itemId)
         : line.itemId === itemId)
       .reduce((lineSum, line) => lineSum + Number(line.quantity || 0), 0), 0);
+}
+
+function lineReview(line, stage) {
+  return line?.reviews?.[stage] || null;
+}
+
+function lineIsRejected(line) {
+  return [lineReview(line, "store"), lineReview(line, "pmu")]
+    .some((review) => review?.decision === "REJECTED");
+}
+
+function hasStructuredLineReviews(requisition) {
+  return (requisition?.lines || []).some((line) => Boolean(lineReview(line, "store") || lineReview(line, "pmu")));
+}
+
+function lineIsFinallyApproved(line, requisition) {
+  if (lineIsRejected(line)) return false;
+  const pmuReview = lineReview(line, "pmu");
+  if (pmuReview) return pmuReview.decision === "APPROVED";
+  const hasStructuredReview = Boolean(lineReview(line, "store"));
+  return !hasStructuredReview && ["APPROVED", "ORDERED", "PARTIALLY_RECEIVED", "RECEIVED", "CLOSED"].includes(requisition.status);
+}
+
+function receivableRequisitionLines(requisition) {
+  return (requisition.lines || []).filter((line) => lineIsFinallyApproved(line, requisition));
+}
+
+function normalizeLineDecisions(body, eligibleLines) {
+  const decisions = Array.isArray(body.lineDecisions) ? body.lineDecisions : [];
+  const eligibleIds = new Set(eligibleLines.map((line) => line.id));
+  const byLineId = new Map();
+  for (const entry of decisions) {
+    const lineId = normalizeText(entry.lineId);
+    const decision = normalizeText(entry.decision).toUpperCase();
+    const note = normalizeText(entry.note);
+    if (!eligibleIds.has(lineId)) throw new Error("A review decision references an ineligible requisition item.");
+    if (byLineId.has(lineId)) throw new Error("Each requisition item can be reviewed only once per stage.");
+    if (!["APPROVED", "REJECTED"].includes(decision)) throw new Error("Choose Approve or Reject for every requisition item.");
+    if (decision === "REJECTED" && !note) throw new Error("A rejection reason is required for every rejected item.");
+    byLineId.set(lineId, { lineId, decision, note });
+  }
+  if (byLineId.size !== eligibleLines.length) throw new Error("Review every eligible requisition item before continuing.");
+  return eligibleLines.map((line) => byLineId.get(line.id));
+}
+
+function applyLineReviews(requisition, stage, decisions, user, at) {
+  const decisionMap = new Map(decisions.map((entry) => [entry.lineId, entry]));
+  for (const line of requisition.lines || []) {
+    const decision = decisionMap.get(line.id);
+    if (!decision) continue;
+    line.reviews = {
+      ...(line.reviews || {}),
+      [stage]: {
+        decision: decision.decision,
+        note: decision.note,
+        by: user.id,
+        byName: user.name,
+        at
+      }
+    };
+  }
 }
 
 function lineAmount(line = {}) {
@@ -691,7 +754,7 @@ function orderedItemRows(store) {
   const rows = [];
   for (const requisition of activeRows(store.requisitions)) {
     const date = String(requisition.date || requisition.createdAt || "").slice(0, 10);
-    for (const line of requisition.lines || []) {
+    for (const line of (requisition.lines || []).filter((entry) => !lineIsRejected(entry))) {
       rows.push({
         date,
         itemId: line.itemId || "",
@@ -1167,25 +1230,84 @@ async function routeApi(req, res, pathname) {
 
   const requisitionIdForEdit = parseResourcePath(pathname, "requisitions");
   if (requisitionIdForEdit && ["PATCH", "DELETE"].includes(req.method)) {
-    if (!adminOnly(user)) return sendError(res, 403, "Only admin can edit or delete requisitions.");
     try {
       const record = findRecord(store.requisitions, requisitionIdForEdit, "Requisition");
+      const requesterEdit = req.method === "PATCH"
+        && hasPermission(user, "requisition:edit")
+        && user.role === "requester"
+        && record.createdBy === user.id;
+      if (!adminOnly(user) && !requesterEdit) {
+        return sendError(res, 403, req.method === "DELETE" ? "Only admin can delete requisitions." : "You can edit only your own requisitions.");
+      }
       const before = cloneForAudit(record);
       if (req.method === "DELETE") {
         softDelete(record, user);
+      } else if (requesterEdit) {
+        const hasReceipt = activeRows(store.receipts).some((receipt) => receipt.requisitionId === record.id);
+        const canResubmit = ["SUBMITTED", "STORE_VERIFIED", "REJECTED"].includes(record.status)
+          && !record.supplyOrderNo
+          && !record.orderedAt
+          && !hasReceipt;
+        if (!canResubmit) return sendError(res, 409, "This requisition can no longer be edited because it has been finally approved, ordered, or received.");
+        const body = await readBody(req);
+        const lines = (body.lines || []).filter((line) => normalizeText(line.itemName || line.name));
+        if (!lines.length) return sendError(res, 400, "Add at least one item.");
+        const beforeItemIds = new Set(store.items.map((item) => item.id));
+        const existingLineIds = new Set((record.lines || []).map((line) => line.id));
+        const usedLineIds = new Set();
+        record.lines = lines.map((line) => {
+          const item = findOrCreateItem(store, line);
+          const requestedId = normalizeText(line.id);
+          const id = requestedId && existingLineIds.has(requestedId) && !usedLineIds.has(requestedId)
+            ? requestedId
+            : `rl-${crypto.randomUUID().slice(0, 8)}`;
+          usedLineIds.add(id);
+          return {
+            id,
+            itemId: item.id,
+            itemName: item.name,
+            category: normalizeText(line.category),
+            specification: normalizeText(line.specification),
+            quantity: qtyNumber(line.quantity),
+            unit: normalizeText(line.unit || item.unit),
+            issuedTillDate: Number(line.issuedTillDate || 0),
+            balance: Number(line.balance || 0),
+            remarks: normalizeText(line.remarks)
+          };
+        });
+        applyBasicPatch(record, body, ["requisitionNo", "requestDate", "projectId", "budgetHeadId", "infrastructureId", "purpose"]);
+        record.status = "SUBMITTED";
+        record.updatedAt = new Date().toISOString();
+        record.updatedBy = user.id;
+        record.updatedByName = user.name;
+        delete record.rejectionReason;
+        delete record.rejectedAt;
+        delete record.rejectedByName;
+        delete record.rejectionStage;
+        record.approvals ||= [];
+        record.approvals.push({
+          action: "resubmit_after_edit",
+          by: user.id,
+          byName: user.name,
+          role: user.role,
+          note: "Edited and resubmitted for fresh approval",
+          at: record.updatedAt
+        });
+        appendNewItemAudits(store, req, user, beforeItemIds);
       } else {
         const body = await readBody(req);
         applyBasicPatch(record, body, ["requisitionNo", "requestDate", "receivedDate", "projectId", "budgetHeadId", "infrastructureId", "purpose", "status", "supplyOrderNo"]);
         if (Array.isArray(body.lines)) record.lines = body.lines;
       }
       appendAuditEvent(store, req, user, {
-        eventType: req.method === "DELETE" ? "SOFT_DELETE" : "UPDATE",
+        eventType: req.method === "DELETE" ? "SOFT_DELETE" : requesterEdit ? "REQUISITION_RESUBMITTED" : "UPDATE",
         entityType: "requisition",
         entityId: record.id,
         entityLabel: record.requisitionNo,
         before,
         after: record,
-        linkedRequisitionId: record.id
+        linkedRequisitionId: record.id,
+        remarks: requesterEdit ? "PIU edited and resubmitted the requisition for fresh approval." : ""
       });
       await writeStore(store);
       return sendJson(res, 200, record);
@@ -1202,41 +1324,87 @@ async function routeApi(req, res, pathname) {
     const action = body.action;
     const now = new Date().toISOString();
     const before = cloneForAudit(requisition);
-    if (action === "verify") {
+    if (action === "reopen_item_review") {
+      if (!hasPermission(user, "requisition:first_approve") && !hasPermission(user, "requisition:final_approve") && !adminOnly(user)) {
+        return sendError(res, 403, "Only Store, PMU, or admin can reopen a legacy rejected requisition.");
+      }
+      if (requisition.status !== "REJECTED" || hasStructuredLineReviews(requisition)) {
+        return sendError(res, 400, "Only a legacy whole-rejected requisition can be reopened for item review.");
+      }
+      const hasReceipt = activeRows(store.receipts).some((receipt) => receipt.requisitionId === requisition.id);
+      if (requisition.supplyOrderNo || requisition.orderedAt || hasReceipt) {
+        return sendError(res, 409, "This rejected requisition cannot be reopened because it has an order or receipt.");
+      }
+      const previousReason = normalizeText(requisition.rejectionReason || body.note || "Legacy whole-requisition rejection");
+      requisition.legacyRejectionHistory ||= [];
+      requisition.legacyRejectionHistory.push({
+        reason: previousReason,
+        rejectedAt: requisition.rejectedAt || "",
+        rejectedByName: requisition.rejectedByName || "",
+        reopenedAt: now,
+        reopenedBy: user.id,
+        reopenedByName: user.name
+      });
+      requisition.status = "SUBMITTED";
+      delete requisition.rejectionReason;
+      delete requisition.rejectedAt;
+      delete requisition.rejectedByName;
+      delete requisition.rejectionStage;
+      body.note = `Reopened for item-level review. Previous rejection reason: ${previousReason}`;
+    } else if (action === "verify") {
       if (!hasPermission(user, "requisition:first_approve")) return sendError(res, 403, "Only store/PMU can verify.");
       if (requisition.status !== "SUBMITTED") return sendError(res, 400, "Only submitted requisitions can be verified.");
-      requisition.status = "STORE_VERIFIED";
+      try {
+        const eligibleLines = requisition.lines || [];
+        const decisions = normalizeLineDecisions(body, eligibleLines);
+        applyLineReviews(requisition, "store", decisions, user, now);
+        requisition.status = decisions.some((entry) => entry.decision === "APPROVED") ? "STORE_VERIFIED" : "REJECTED";
+        if (requisition.status === "REJECTED") {
+          requisition.rejectionStage = "STORE";
+          requisition.rejectedAt = now;
+          requisition.rejectedByName = user.name;
+        }
+        body.lineDecisions = decisions;
+      } catch (error) {
+        return sendThrown(res, error);
+      }
     } else if (action === "final_approve") {
       if (!hasPermission(user, "requisition:final_approve")) return sendError(res, 403, "Only the final approver can approve.");
       if (requisition.status !== "STORE_VERIFIED") return sendError(res, 400, "Final approval requires store verification first.");
-      requisition.status = "APPROVED";
+      try {
+        const eligibleLines = (requisition.lines || []).filter((line) => !lineIsRejected(line));
+        const decisions = normalizeLineDecisions(body, eligibleLines);
+        applyLineReviews(requisition, "pmu", decisions, user, now);
+        requisition.status = decisions.some((entry) => entry.decision === "APPROVED") ? "APPROVED" : "REJECTED";
+        if (requisition.status === "REJECTED") {
+          requisition.rejectionStage = "PMU";
+          requisition.rejectedAt = now;
+          requisition.rejectedByName = user.name;
+        }
+        body.lineDecisions = decisions;
+      } catch (error) {
+        return sendThrown(res, error);
+      }
     } else if (action === "order") {
       if (!hasPermission(user, "requisition:order")) return sendError(res, 403, "Only store/PMU can mark order placed.");
       if (requisition.status !== "APPROVED") return sendError(res, 400, "Only final approved requisitions can be ordered.");
       requisition.status = "ORDERED";
       requisition.supplyOrderNo = normalizeText(body.supplyOrderNo);
       requisition.orderedAt = now;
-    } else if (action === "reject") {
-      if (!hasPermission(user, "requisition:first_approve") && !hasPermission(user, "requisition:final_approve")) {
-        return sendError(res, 403, "Only approvers can reject.");
-      }
-      if (!normalizeText(body.note)) return sendError(res, 400, "Rejection reason is required.");
-      requisition.status = "REJECTED";
-      requisition.rejectionReason = normalizeText(body.note);
-      requisition.rejectedAt = now;
-      requisition.rejectedByName = user.name;
     } else if (action === "close") {
       if (!hasPermission(user, "requisition:order")) return sendError(res, 403, "Only store/PMU can close.");
       requisition.status = "CLOSED";
     } else {
       return sendError(res, 400, "Unknown status action.");
     }
+    requisition.approvals ||= [];
     requisition.approvals.push({
       action,
       by: user.id,
       byName: user.name,
       role: user.role,
       note: normalizeText(body.note),
+      lineDecisions: cloneForAudit(body.lineDecisions || []),
       at: now
     });
     appendAuditEvent(store, req, user, {
@@ -1435,6 +1603,28 @@ async function routeApi(req, res, pathname) {
     if (!normalizeText(requisition.budgetHeadId)) {
       return sendError(res, 400, "The linked requisition has no budget head. Assign one before receiving stock.");
     }
+    const eligibleLines = receivableRequisitionLines(requisition);
+    const eligibleLineMap = new Map(eligibleLines.map((line) => [line.id, line]));
+    const stagedQuantities = new Map();
+    let preparedLines;
+    try {
+      preparedLines = lines.map((line) => {
+        const requisitionLineId = normalizeText(line.requisitionLineId);
+        const requisitionLine = eligibleLineMap.get(requisitionLineId);
+        if (!requisitionLine) throw new Error("Received items must match a finally approved requisition line.");
+        const quantity = qtyNumber(line.quantity);
+        const alreadyReceived = receivedQtyForRequisition(store, requisition.id, requisitionLine.itemId, requisitionLine.id);
+        const staged = Number(stagedQuantities.get(requisitionLine.id) || 0);
+        const remaining = Math.max(0, Number(requisitionLine.quantity || 0) - alreadyReceived - staged);
+        if (quantity > remaining + 0.000001) {
+          throw new Error(`${requisitionLine.itemName} exceeds the remaining approved quantity of ${remaining}.`);
+        }
+        stagedQuantities.set(requisitionLine.id, staged + quantity);
+        return { source: line, requisitionLine, quantity };
+      });
+    } catch (error) {
+      return sendThrown(res, error);
+    }
     const receipt = {
       id: nextId(store, "receipt", "REC"),
       date: body.date || new Date().toISOString().slice(0, 10),
@@ -1456,17 +1646,19 @@ async function routeApi(req, res, pathname) {
       lines: []
     };
     const linkedLedgerIds = [];
-    for (const line of lines) {
-      const item = findOrCreateItem(store, line);
-      const quantity = qtyNumber(line.quantity);
-      const unit = normalizeText(line.unit || item.unit);
+    for (const prepared of preparedLines) {
+      const line = prepared.source;
+      const requisitionLine = prepared.requisitionLine;
+      const item = findItemById(store, requisitionLine.itemId);
+      const quantity = prepared.quantity;
+      const unit = normalizeText(line.unit || requisitionLine.unit || item.unit);
       receipt.lines.push({
         id: `rli-${crypto.randomUUID().slice(0, 8)}`,
         itemId: item.id,
         itemName: item.name,
-        requisitionLineId: normalizeText(line.requisitionLineId),
-        category: normalizeText(line.category),
-        specification: normalizeText(line.specification),
+        requisitionLineId: requisitionLine.id,
+        category: normalizeText(requisitionLine.category || item.category),
+        specification: normalizeText(requisitionLine.specification),
         quantity,
         unit,
         rate: Number(line.rate || 0),
@@ -1498,7 +1690,8 @@ async function routeApi(req, res, pathname) {
     store.receipts.push(receipt);
     appendNewItemAudits(store, req, user, beforeItemIds);
     if (requisition) {
-      const allReceived = (requisition.lines || []).every((line) => {
+      const approvedLines = receivableRequisitionLines(requisition);
+      const allReceived = approvedLines.length > 0 && approvedLines.every((line) => {
         const ordered = Number(line.quantity || 0);
         return ordered > 0 && receivedQtyForRequisition(store, requisition.id, line.itemId, line.id) >= ordered;
       });

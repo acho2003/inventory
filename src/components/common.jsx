@@ -1,6 +1,6 @@
 import { Search } from "lucide-react";
 import { statusLabels } from "../config/constants.js";
-import { fmt, lineSummary, num } from "../lib/utils.js";
+import { fmt, lineSummary, num, requisitionProgressLines } from "../lib/utils.js";
 
 export function Header({ title, subtitle, eyebrow }) {
   return (
@@ -170,7 +170,7 @@ export function CompactRequestList({ rows }) {
         <div className="request-card" key={row.id}>
           <div>
             <strong>{fmt(row.requisitionNo)}</strong>
-            <span>{lineSummary(row.lines)}</span>
+            <span>{lineSummary(requisitionProgressLines(row))}</span>
           </div>
           <span className={`status ${row.status}`}>{statusLabels[row.status] || row.status}</span>
         </div>
@@ -200,4 +200,3 @@ export function SearchBox({ value, onChange, placeholder }) {
     </label>
   );
 }
-

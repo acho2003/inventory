@@ -2,12 +2,12 @@ import React, { useState } from "react";
 import { stockEventTypes } from "../config/constants.js";
 import { byId, fmt, matchesSearch, num } from "../lib/utils.js";
 import { buildLifecycleEvents, filterInventoryLedger, filterLifecycleEvents, filterLifecycleRows, ledgerDocumentFields, summarizeAllStock, summarizeLedger } from "../lib/inventory.js";
+import { downloadLedgerPdf, downloadLedgerXlsx, ledgerFilterSummary } from "../lib/ledger-export.js";
 import { Header, PanelTitle, SearchBox, SegmentedTabs } from "../components/common.jsx";
 import { IssueHistoryTable, StockEventTable } from "../components/stock.jsx";
 
 export function Inventory({ data }) {
   const [activeTab, setActiveTab] = useState("summary");
-  const [traceItemId, setTraceItemId] = useState("");
   const [infrastructureFilters, setInfrastructureFilters] = useState({ itemId: "", infrastructureId: "", dateFrom: "", dateTo: "" });
   const [ledgerFilters, setLedgerFilters] = useState({ itemId: "", infrastructureId: "", dateFrom: "", dateTo: "", query: "" });
   const infrastructureMap = byId(data.infrastructures);
@@ -60,8 +60,6 @@ export function Inventory({ data }) {
       {activeTab === "ledger" ? (
         <InventoryLedgerTab
           data={data}
-          traceItemId={traceItemId}
-          setTraceItemId={setTraceItemId}
           filters={ledgerFilters}
           setFilters={setLedgerFilters}
         />
@@ -93,13 +91,13 @@ function InventoryFilterBar({ filters, setFilters, items, infrastructures, inclu
 
 
 
-function InventoryLedgerTab({ data, traceItemId, setTraceItemId, filters, setFilters }) {
+function InventoryLedgerTab({ data, filters, setFilters }) {
   const transferEvents = data.stockEvents.filter((event) => event.type === "TRANSFER");
   const conditionEvents = data.stockEvents.filter((event) => ["RETURNED_FROM_REPAIR", "REPAIR_NOTE", "DISPOSED", "SPOILED"].includes(event.type));
   return (
     <div className="inventory-ledger-stack">
       <InventoryFilterBar filters={filters} setFilters={setFilters} items={data.items} infrastructures={data.infrastructures} />
-      <ItemTracePanel data={data} traceItemId={traceItemId} setTraceItemId={setTraceItemId} filters={filters} />
+      <ItemTracePanel data={data} filters={filters} />
       <div className="ledger-history-grid">
         <div className="panel">
           <PanelTitle title="Issue History" subtitle="Issued stock movements kept for audit and traceability." />
@@ -120,14 +118,37 @@ function InventoryLedgerTab({ data, traceItemId, setTraceItemId, filters, setFil
 
 
 
-function ItemTracePanel({ data, traceItemId, setTraceItemId, filters }) {
+function ItemTracePanel({ data, filters }) {
+  const [exporting, setExporting] = useState("");
+  const [exportError, setExportError] = useState("");
   const rows = filterLifecycleRows(data.ledger, filters)
-    .filter((row) => !traceItemId || row.itemId === traceItemId)
     .slice();
   const events = filterLifecycleEvents(buildLifecycleEvents(rows, data.receipts, data.stockEvents), filters, data.infrastructures);
+  const filterSummary = ledgerFilterSummary(filters, data.items, data.infrastructures);
+
+  async function download(format) {
+    setExporting(format);
+    setExportError("");
+    try {
+      if (format === "xlsx") await downloadLedgerXlsx(events, data.infrastructures, filterSummary);
+      else await downloadLedgerPdf(events, data.infrastructures, filterSummary);
+    } catch (error) {
+      setExportError(error.message || "The report could not be generated.");
+    } finally {
+      setExporting("");
+    }
+  }
   return (
     <div className="panel">
-      <PanelTitle title="Stock Ledger / Item Trace" subtitle="Consolidated lifecycle movements with document numbers, locations, and linked amount." />
+      <div className="ledger-panel-heading">
+        <PanelTitle title="Stock Ledger / Item Trace" subtitle="Consolidated lifecycle movements with document numbers, locations, and linked amount." />
+        <div className="actions ledger-export-actions">
+          <button type="button" disabled={!events.length || Boolean(exporting)} onClick={() => download("xlsx")}>{exporting === "xlsx" ? "Preparing Excel…" : "Download Excel"}</button>
+          <button type="button" disabled={!events.length || Boolean(exporting)} onClick={() => download("pdf")}>{exporting === "pdf" ? "Preparing PDF…" : "Download PDF"}</button>
+        </div>
+      </div>
+      <div className="muted ledger-filter-summary">{filterSummary}</div>
+      {exportError ? <div className="error">{exportError}</div> : null}
       <LifecycleLedgerTable events={events} infrastructures={data.infrastructures} receipts={data.receipts} stockEvents={data.stockEvents} />
       {!events.length ? <div className="empty compact-empty">No lifecycle movements found.</div> : null}
     </div>
@@ -143,38 +164,11 @@ function InfrastructureInventorySection({ group }) {
   return (
     <section className="panel infrastructure-stock-section">
       <PanelTitle title={group.name} subtitle={`${group.status} | Received ${num(received)} | Issued ${num(issued)} | Balance ${num(balance)}`} />
-      <div className="grid two infrastructure-stock-grid">
-        <div>
-          <h3 className="section-subtitle">Current Stock</h3>
-          <InventoryTable rows={group.stock} compact />
-        </div>
-        <div>
-          <h3 className="section-subtitle">Recent Movements</h3>
-          <RecentMovementTable rows={group.ledger.slice().reverse().slice(0, 5)} />
-        </div>
+      <div>
+        <h3 className="section-subtitle">Current Stock</h3>
+        <InventoryTable rows={group.stock} compact />
       </div>
     </section>
-  );
-}
-
-
-
-function RecentMovementTable({ rows = [] }) {
-  if (!rows.length) return <div className="empty compact-empty">No recent movements.</div>;
-  return (
-    <div className="recent-movement-table">
-      <table>
-        <thead><tr><th>Date</th><th>Type</th><th>Item</th><th>Quantity</th></tr></thead>
-        <tbody>{rows.map((row) => (
-          <tr key={row.id}>
-            <td>{fmt(row.date)}</td>
-            <td><span className="movement-type">{fmt(row.type)}</span></td>
-            <td><strong>{fmt(row.itemName)}</strong></td>
-            <td>{num(row.quantity)} {fmt(row.unit)}</td>
-          </tr>
-        ))}</tbody>
-      </table>
-    </div>
   );
 }
 
@@ -305,4 +299,3 @@ function LifecycleLedgerTable({ events = [], infrastructures = [], receipts = []
     </div>
   );
 }
-
