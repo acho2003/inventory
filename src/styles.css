@@ -154,6 +154,12 @@ h2 { margin-bottom: 8px; font-size: 17px; }
 
 .login-form h2 { margin-bottom: 4px; }
 
+.login-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .demo-users {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -202,6 +208,10 @@ h2 { margin-bottom: 8px; font-size: 17px; }
 
   .login-form {
     padding: 30px;
+  }
+
+  .login-actions {
+    grid-template-columns: 1fr;
   }
 
   .demo-users {
@@ -404,6 +414,41 @@ h2 { margin-bottom: 8px; font-size: 17px; }
   align-content: start;
   max-width: 1640px;
   width: 100%;
+}
+
+.public-stock-page {
+  min-height: 100vh;
+  padding: 24px clamp(14px, 3vw, 44px) 44px;
+}
+
+.public-stock-shell {
+  width: min(1440px, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 20px;
+}
+
+.public-stock-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.compact-brand {
+  color: var(--foreground);
+  padding: 0;
+}
+
+.compact-brand small {
+  color: var(--muted-foreground);
+}
+
+.public-stock-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
 }
 
 .topbar {

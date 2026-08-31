@@ -794,6 +794,83 @@ function dashboard(store) {
   };
 }
 
+function publicStockSummary(store) {
+  const rows = new Map();
+  for (const stock of inventorySummary(store)) {
+    const current = rows.get(stock.itemId) || {
+      itemId: stock.itemId,
+      itemName: stock.itemName,
+      category: stock.category || "General",
+      unit: stock.unit || "",
+      receivedAtArrival: 0,
+      storeStock: 0,
+      infrastructureStock: 0,
+      disposedOrSpoiled: 0,
+      totalAvailable: 0,
+      lastMovementAt: stock.lastMovementAt || ""
+    };
+    if (stock.infrastructureId) current.infrastructureStock += Number(stock.balance || 0);
+    else current.storeStock += Number(stock.balance || 0);
+    if (!current.lastMovementAt || String(stock.lastMovementAt || "") > current.lastMovementAt) current.lastMovementAt = stock.lastMovementAt || "";
+    rows.set(stock.itemId, current);
+  }
+  for (const movement of activeRows(store.ledger)) {
+    const current = rows.get(movement.itemId) || {
+      itemId: movement.itemId,
+      itemName: movement.itemName,
+      category: movement.category || "General",
+      unit: movement.unit || "",
+      receivedAtArrival: 0,
+      storeStock: 0,
+      infrastructureStock: 0,
+      disposedOrSpoiled: 0,
+      totalAvailable: 0,
+      lastMovementAt: movement.date || ""
+    };
+    if (movement.type === "RECEIPT") current.receivedAtArrival += Number(movement.quantity || 0);
+    if (["DISPOSED", "SPOILED"].includes(movement.type)) current.disposedOrSpoiled += Number(movement.quantity || 0);
+    if (!current.lastMovementAt || String(movement.date || "") > current.lastMovementAt) current.lastMovementAt = movement.date || "";
+    rows.set(movement.itemId, current);
+  }
+  return [...rows.values()]
+    .map((row) => ({ ...row, totalAvailable: row.storeStock + row.infrastructureStock }))
+    .sort((a, b) => a.itemName.localeCompare(b.itemName));
+}
+
+function publicStockPayload(store) {
+  const inventory = inventorySummary(store);
+  const infrastructures = activeRows(store.infrastructures).map((infra) => ({
+    id: infra.id,
+    name: infra.name,
+    status: infra.status || "Active"
+  }));
+  const infrastructureMap = new Map(infrastructures.map((infra) => [infra.id, infra]));
+  const groups = infrastructures
+    .map((infra) => ({
+      ...infra,
+      stock: inventory.filter((row) => row.infrastructureId === infra.id)
+    }))
+    .filter((group) => group.stock.length);
+  const storeStock = inventory.filter((row) => !row.infrastructureId || !infrastructureMap.has(row.infrastructureId));
+  if (storeStock.length) {
+    groups.push({
+      id: "store",
+      name: "Store / Not Assigned to Infrastructure",
+      status: "Store",
+      stock: storeStock
+    });
+  }
+  return {
+    generatedAt: new Date().toISOString(),
+    items: activeRows(store.items)
+      .map((item) => ({ id: item.id, name: item.name, category: item.category || "General", unit: item.unit || "" }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+    infrastructures,
+    summary: publicStockSummary(store),
+    groups
+  };
+}
+
 function deletedAuditCounts(store) {
   const collectionsToCount = ["budgetHeads", "infrastructures", "items", "requisitions", "receipts", "issues", "stockEvents"];
   return collectionsToCount.reduce((result, collection) => {
@@ -935,6 +1012,10 @@ async function routeApi(req, res, pathname) {
   }
 
   const store = await readStore();
+  if (req.method === "GET" && pathname === "/api/public-stock") {
+    return sendJson(res, 200, publicStockPayload(activeStore(store)));
+  }
+
   const user = await requireUser(req, res, store);
   if (!user) return;
   const visible = activeStore(store);

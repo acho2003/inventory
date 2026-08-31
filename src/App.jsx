@@ -13,11 +13,15 @@ import { Inventory } from "./pages/Inventory.jsx";
 import { IssueStock } from "./pages/IssueStock.jsx";
 import { Reports } from "./pages/Reports.jsx";
 import { AuditTrail } from "./pages/AuditTrail.jsx";
+import { PublicStock } from "./pages/PublicStock.jsx";
+
+const publicStockPath = "/stock";
 
 export function App() {
   const [token, setToken] = useState(localStorage.getItem("yarju_token") || "");
   const [user, setUser] = useState(null);
   const [view, setView] = useState("dashboard");
+  const [route, setRoute] = useState(window.location.pathname === publicStockPath ? "public-stock" : "app");
   const [data, setData] = useState({ dashboard: null, projects: [], budgetHeads: [], infrastructures: [], items: [], requisitions: [], receipts: [], issues: [], inventory: [], ledger: [], stockEvents: [], auditEvents: [], auditSummary: null, reports: null });
   const [loading, setLoading] = useState(true);
   const api = useApi(token);
@@ -93,12 +97,22 @@ export function App() {
     return () => { cancelled = true; };
   }, [token]);
 
+  useEffect(() => {
+    function syncRoute() {
+      setRoute(window.location.pathname === publicStockPath ? "public-stock" : "app");
+    }
+    window.addEventListener("popstate", syncRoute);
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
+
   async function login(username, password) {
     const result = await api("/api/login", { method: "POST", body: JSON.stringify({ username, password }) });
     localStorage.setItem("yarju_token", result.token);
     setToken(result.token);
     setUser(result.user);
     setView(firstAllowedView(result.user));
+    window.history.pushState({}, "", "/");
+    setRoute("app");
   }
 
   async function changeView(nextView) {
@@ -111,8 +125,19 @@ export function App() {
     if (user && !viewAllowed(user, view)) setView(firstAllowedView(user));
   }, [user, view]);
 
+  function openPublicStock() {
+    window.history.pushState({}, "", publicStockPath);
+    setRoute("public-stock");
+  }
+
+  function openSignIn() {
+    window.history.pushState({}, "", "/");
+    setRoute("app");
+  }
+
   if (loading) return <div className="login"><div className="panel">Loading...</div></div>;
-  if (!token || !user) return <Login onLogin={login} />;
+  if (route === "public-stock") return <PublicStock onSignIn={openSignIn} />;
+  if (!token || !user) return <Login onLogin={login} onOpenPublicStock={openPublicStock} />;
 
   const navItems = [
     ["dashboard", "Dashboard", BarChart3, viewAllowed(user, "dashboard")],
@@ -184,4 +209,3 @@ function CurrentView(props) {
   if (props.view === "reports") return <Reports {...props} />;
   if (props.view === "audit") return <AuditTrail {...props} />;
 }
-

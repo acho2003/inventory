@@ -70,7 +70,7 @@ export function Inventory({ data }) {
 
 
 
-function InventoryFilterBar({ filters, setFilters, items, infrastructures, includeSearch = true }) {
+export function InventoryFilterBar({ filters, setFilters, items, infrastructures, includeSearch = true }) {
   return (
     <div className="panel compact-filter-panel">
       {includeSearch ? (
@@ -157,7 +157,7 @@ function ItemTracePanel({ data, filters }) {
 
 
 
-function InfrastructureInventorySection({ group }) {
+export function InfrastructureInventorySection({ group }) {
   const received = group.stock.reduce((sum, row) => sum + Number(row.received || 0), 0);
   const issued = group.stock.reduce((sum, row) => sum + Number(row.issued || 0), 0);
   const balance = group.stock.reduce((sum, row) => sum + Number(row.balance || 0), 0);
@@ -195,7 +195,7 @@ function InventoryTable({ rows, compact = false, infrastructures = [] }) {
 
 
 
-function AllStockSummaryTable({ rows = [] }) {
+export function AllStockSummaryTable({ rows = [] }) {
   const [query, setQuery] = useState("");
   const filtered = rows.filter((row) => matchesSearch([row.itemName, row.category, row.unit, row.lastMovementAt], query));
   if (!rows.length) return <div className="empty">No stock movements found.</div>;

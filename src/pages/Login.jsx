@@ -1,7 +1,8 @@
 import { useState } from "react";
+import { Boxes } from "lucide-react";
 import { APP_NAME } from "../config/constants.js";
 
-export function Login({ onLogin }) {
+export function Login({ onLogin, onOpenPublicStock }) {
   const [error, setError] = useState("");
   const [form, setForm] = useState({ username: "", password: "" });
 
@@ -36,10 +37,15 @@ export function Login({ onLogin }) {
           <label>Email <input type="email" autoComplete="username" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required /></label>
           <label>Password <input type="password" autoComplete="current-password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} required /></label>
           {error ? <div className="error">{error}</div> : null}
-          <button className="primary" type="submit">Sign in</button>
+          <div className="login-actions">
+            <button className="primary" type="submit">Sign in</button>
+            <button type="button" className="soft-button" onClick={onOpenPublicStock}>
+              <Boxes size={16} />
+              <span>View stock summary</span>
+            </button>
+          </div>
         </form>
       </div>
     </section>
   );
 }
-
